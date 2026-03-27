@@ -1,0 +1,1062 @@
+-- ============================================================================
+-- Canonical Design System ASDL Surface (Refined)
+-- ----------------------------------------------------------------------------
+-- This language sits ABOVE UiDecl.
+--
+-- Design-system authors edit DesignDecl.
+-- The design-system compiler resolves it into DesignResolved.
+-- App/widget lowering USES resolved recipes while constructing UiDecl.
+--
+--     DesignDecl
+--         ↓ resolve
+--     DesignResolved
+--         ↑ apply
+--     App.Widget
+--         ↓ lower
+--       UiDecl
+--
+-- Refinement goals:
+--   - keep the design-system source language focused on actual DS nouns
+--   - keep recipe use typed, but avoid building a second UI tree language
+--   - separate semantic roles from primitive tokens
+--   - keep enforcement structural and explicit
+--   - compile DS decisions into UiDecl rather than leaking them to runtime
+-- ============================================================================
+
+
+module DesignCore {
+
+    -- ------------------------------------------------------------------------
+    -- Stable identities
+    -- ------------------------------------------------------------------------
+    TokenRef        = (number value) unique
+    RoleRef         = (number value) unique
+    ThemeRef        = (number value) unique
+    ModeRef         = (number value) unique
+    RecipeRef       = (number value) unique
+    SlotRef         = (number value) unique
+    VariantAxisRef  = (number value) unique
+    VariantValueRef = (number value) unique
+    PolicyRef       = (number value) unique
+    ConstraintRef   = (number value) unique
+
+    -- ------------------------------------------------------------------------
+    -- Value kinds
+    -- ------------------------------------------------------------------------
+    -- Used to validate that tokens, roles, and references line up by kind.
+    NumberKind = SpaceNumber()
+               | RadiusNumber()
+               | StrokeNumber()
+               | OpacityNumber()
+               | DurationNumber()
+               | ElevationNumber()
+               | GenericNumber()
+
+    ValueKind = ColorValue()
+              | NumberValue(NumberKind kind)
+              | FontValue()
+              | TextStyleValue()
+
+    -- ------------------------------------------------------------------------
+    -- Slot semantics
+    -- ------------------------------------------------------------------------
+    -- SlotKind:
+    --   Design-system structural contract for a slot.
+    --   This is not a renderer concept.
+    SlotKind = ContainerSlot()
+             | ContentSlot()
+             | TextSlot()
+             | ImageSlot()
+             | DecorSlot()
+
+    SlotFlags = (
+        boolean optional,
+        boolean repeatable
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Interactive state selectors
+    -- ------------------------------------------------------------------------
+    -- Design-system states used to select authored rules.
+    -- These are selectors, not runtime events.
+    StateTag = DefaultState()
+             | Hovered()
+             | Pressed()
+             | Focused()
+             | Disabled()
+             | Selected()
+             | Invalid()
+             | Open()
+             | Active()
+             | Checked()
+
+    StateSelector = (
+        StateTag* all_of,
+        StateTag* none_of
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Variant selections
+    -- ------------------------------------------------------------------------
+    VariantSelection = (
+        VariantAxisRef axis,
+        VariantValueRef value
+    ) unique
+}
+
+
+
+module DesignDecl {
+
+    -- ------------------------------------------------------------------------
+    -- Canonical authored design-system phase.
+    --
+    -- What belongs here:
+    --   - primitive tokens
+    --   - semantic roles
+    --   - themes and modes
+    --   - recipes, slots, variants, and state rules
+    --   - enforcement policy
+    --
+    -- What does NOT belong here:
+    --   - solved UiDecl trees
+    --   - renderer details
+    --   - runtime callbacks
+    --   - app-specific widget semantics
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        number version,
+        DesignCore.ThemeRef? default_theme,
+        Token* tokens,
+        Role* roles,
+        Theme* themes,
+        Recipe* recipes,
+        Policy* policies
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Primitive tokens
+    -- ------------------------------------------------------------------------
+    -- Tokens are the smallest authored design values.
+    -- Semantic meaning is carried by ROLES, not by token names alone.
+    Token = ColorToken(
+                DesignCore.TokenRef id,
+                string name,
+                UiCore.Color value
+            )
+          | NumberToken(
+                DesignCore.TokenRef id,
+                string name,
+                DesignCore.NumberKind kind,
+                number value
+            )
+          | FontToken(
+                DesignCore.TokenRef id,
+                string name,
+                UiCore.FontRef value
+            )
+
+    -- ------------------------------------------------------------------------
+    -- Semantic roles
+    -- ------------------------------------------------------------------------
+    -- Roles are what recipes should consume.
+    -- They give design-system meaning to primitive values.
+    Role = ColorRole(
+               DesignCore.RoleRef id,
+               string name,
+               ColorExpr default
+           )
+         | NumberRole(
+               DesignCore.RoleRef id,
+               string name,
+               DesignCore.NumberKind kind,
+               NumberExpr default
+           )
+         | FontRole(
+               DesignCore.RoleRef id,
+               string name,
+               FontExpr default
+           )
+         | TextRole(
+               DesignCore.RoleRef id,
+               string name,
+               TextStyleExpr default
+           )
+
+    -- ------------------------------------------------------------------------
+    -- Themes and modes
+    -- ------------------------------------------------------------------------
+    -- Themes provide mode-specific overrides for tokens and roles.
+    -- Resolution flattens these into concrete values.
+    Theme = (
+        DesignCore.ThemeRef id,
+        string name,
+        DesignCore.ModeRef default_mode,
+        Mode* modes
+    ) unique
+
+    Mode = (
+        DesignCore.ModeRef id,
+        string name,
+        Override* overrides
+    ) unique
+
+    Override = TokenOverride(
+                   DesignCore.TokenRef token,
+                   TokenValue value
+               )
+             | ColorRoleOverride(
+                   DesignCore.RoleRef role,
+                   ColorExpr value
+               )
+             | NumberRoleOverride(
+                   DesignCore.RoleRef role,
+                   NumberExpr value
+               )
+             | FontRoleOverride(
+                   DesignCore.RoleRef role,
+                   FontExpr value
+               )
+             | TextRoleOverride(
+                   DesignCore.RoleRef role,
+                   TextStyleExpr value
+               )
+
+    TokenValue = ColorValue(UiCore.Color value)
+               | NumberValue(DesignCore.NumberKind kind, number value)
+               | FontValue(UiCore.FontRef value)
+
+    -- ------------------------------------------------------------------------
+    -- Recipes
+    -- ------------------------------------------------------------------------
+    -- A recipe is a reusable design-system component family.
+    --
+    -- Examples:
+    --   button
+    --   input
+    --   badge
+    --   dialog_shell
+    --   list_item
+    --
+    -- A recipe defines DS structure, default styling, and affordance policy.
+    -- It does NOT define app-specific behavior or business semantics.
+    Recipe = (
+        DesignCore.RecipeRef id,
+        string name,
+        DesignCore.SlotRef root_slot,
+        Slot* slots,
+        VariantAxis* variant_axes,
+        Rule* rules,
+        Constraint* constraints
+    ) unique
+
+    -- Slot:
+    --   Named structural part of a recipe.
+    --   Slots form the recipe-owned containment tree.
+    Slot = (
+        DesignCore.SlotRef id,
+        string name,
+        DesignCore.SlotKind kind,
+        UiCore.Role element_role,
+        DesignCore.SlotFlags flags,
+        DesignCore.SlotRef* children,
+        Patch base
+    ) unique
+
+    VariantAxis = (
+        DesignCore.VariantAxisRef id,
+        string name,
+        boolean required,
+        VariantValue* values
+    ) unique
+
+    VariantValue = (
+        DesignCore.VariantValueRef id,
+        string name
+    ) unique
+
+    -- Rule:
+    --   Partial patch selected by variants or states.
+    --   Rules patch one or more slots by name.
+    Rule = VariantRule(
+               DesignCore.VariantSelection* when,
+               SlotPatch* patches
+           )
+         | StateRule(
+               DesignCore.StateSelector when,
+               SlotPatch* patches
+           )
+
+    SlotPatch = (
+        DesignCore.SlotRef slot,
+        Patch patch
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Patch surface
+    -- ------------------------------------------------------------------------
+    -- Patch is a PARTIAL element specification contributed by the design system.
+    -- It is not a full UiDecl.Element and not a renderer command list.
+    Patch = (
+        LayoutPatch? layout,
+        PaintPatch? paint,
+        ContentPatch? content,
+        AffordancePatch? affordance,
+        AccessibilityPatch? accessibility
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout patch
+    -- ------------------------------------------------------------------------
+    -- Structural recipe intent expressed in token/role-aware forms.
+    LayoutPatch = (
+        SizeExpr? width,
+        SizeExpr? height,
+        PositionExpr? position,
+        UiCore.Flow? flow,
+        GridTemplateExpr? grid,
+        UiCore.GridCell? cell,
+        UiCore.MainAlign? main_align,
+        UiCore.CrossAlign? cross_align,
+        InsetsExpr? padding,
+        InsetsExpr? margin,
+        NumberExpr? gap,
+        UiCore.Overflow? overflow_x,
+        UiCore.Overflow? overflow_y,
+        AspectExpr? aspect
+    ) unique
+
+    SizeExpr = (
+        MeasureExpr min,
+        MeasureExpr preferred,
+        MeasureExpr max
+    ) unique
+
+    MeasureExpr = Auto()
+                | Px(NumberExpr value)
+                | Percent(number value)
+                | Content()
+                | Flex(number weight)
+
+    EdgeExpr = Unset()
+             | EdgePx(NumberExpr value)
+             | EdgePercent(number value)
+
+    -- Anchored positions target recipe slots, not UiDecl element ids.
+    -- Slot refs become element ids only during recipe application.
+    PositionExpr = InFlow()
+                 | Absolute(
+                       EdgeExpr left,
+                       EdgeExpr top,
+                       EdgeExpr right,
+                       EdgeExpr bottom
+                   )
+                 | Anchored(
+                       DesignCore.SlotRef target,
+                       UiCore.AnchorX self_x,
+                       UiCore.AnchorY self_y,
+                       UiCore.AnchorX target_x,
+                       UiCore.AnchorY target_y,
+                       NumberExpr dx,
+                       NumberExpr dy
+                   )
+
+    TrackExpr = AutoTrack()
+              | PxTrack(NumberExpr value)
+              | ContentTrack()
+              | FlexTrack(number weight)
+
+    GridTemplateExpr = (
+        TrackExpr* columns,
+        TrackExpr* rows,
+        NumberExpr column_gap,
+        NumberExpr row_gap,
+        UiCore.AutoFlow auto_flow
+    ) unique
+
+    InsetsExpr = (
+        NumberExpr top,
+        NumberExpr right,
+        NumberExpr bottom,
+        NumberExpr left
+    ) unique
+
+    CornersExpr = (
+        NumberExpr top_left,
+        NumberExpr top_right,
+        NumberExpr bottom_right,
+        NumberExpr bottom_left
+    ) unique
+
+    AspectExpr = (
+        NumberExpr width,
+        NumberExpr height
+    ) unique
+
+    PointExpr = (
+        NumberExpr x,
+        NumberExpr y
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Paint patch
+    -- ------------------------------------------------------------------------
+    -- Decorative paint only.
+    -- Content-bearing text/image are modeled in ContentPatch so slots can host
+    -- app-provided content while still receiving DS-authored styling.
+    PaintPatch = (
+        PaintDecoration* ops
+    ) unique
+
+    PaintDecoration = Box(
+                          BrushExpr fill,
+                          BrushExpr? stroke,
+                          NumberExpr stroke_width,
+                          UiCore.StrokeAlign align,
+                          CornersExpr corners
+                      )
+                    | Shadow(
+                          BrushExpr brush,
+                          NumberExpr blur,
+                          NumberExpr spread,
+                          NumberExpr dx,
+                          NumberExpr dy,
+                          UiCore.ShadowKind kind,
+                          CornersExpr corners
+                      )
+                    | Clip(
+                          CornersExpr corners
+                      )
+                    | Opacity(
+                          NumberExpr value
+                      )
+                    | Transform(
+                          UiCore.Transform2D xform
+                      )
+                    | Blend(
+                          UiCore.BlendMode mode
+                      )
+                    | CustomPaint(
+                          number kind,
+                          number payload
+                      )
+
+    BrushExpr = Solid(ColorExpr color)
+              | LinearGradient(
+                    GradientStopExpr* stops,
+                    PointExpr from,
+                    PointExpr to
+                )
+              | RadialGradient(
+                    GradientStopExpr* stops,
+                    PointExpr center,
+                    NumberExpr radius
+                )
+
+    GradientStopExpr = (
+        number t,
+        ColorExpr color
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Content patch
+    -- ------------------------------------------------------------------------
+    -- ContentPatch styles or constrains the content that app/widget lowering
+    -- binds into a slot.
+    --
+    -- The design system defines how content SHOULD look, but the app/widget
+    -- layer still owns the actual content and tree composition.
+    ContentPatch = NoContent()
+                 | TextContent(
+                       TextStyleExpr style,
+                       UiCore.TextLayout layout
+                   )
+                 | ImageContent(
+                       UiCore.ImageStyle style
+                   )
+
+    -- ------------------------------------------------------------------------
+    -- Affordance patch
+    -- ------------------------------------------------------------------------
+    -- AffordancePatch expresses interaction affordance and participation,
+    -- but not concrete commands.
+    --
+    -- The design system can say:
+    --   "this thing is focusable"
+    --   "this thing shows hover cursor"
+    --   "this slot is editable"
+    --
+    -- It does NOT say what business command should fire.
+    AffordancePatch = (
+        HitPolicy? hit,
+        FocusAffordance? focus,
+        UiCore.CursorRef? hover_cursor,
+        ScrollAffordance? scroll,
+        EditAffordance? edit,
+        DragDropAffordance? drag_drop
+    ) unique
+
+    HitPolicy = HitNone()
+              | HitSelf()
+              | HitSelfAndChildren()
+              | HitChildrenOnly()
+
+    FocusAffordance = NoFocus()
+                    | Focusable(
+                          UiCore.FocusMode mode,
+                          number? order
+                      )
+
+    ScrollAffordance = Scrollable(
+                           UiCore.Axis axis
+                       )
+
+    EditAffordance = Editable(
+                         boolean multiline,
+                         boolean read_only
+                     )
+
+    DragDropAffordance = Draggable(
+                             number? payload_kind
+                         )
+                       | DropTarget(
+                             UiCore.DropPolicy policy
+                         )
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility patch
+    -- ------------------------------------------------------------------------
+    AccessibilityPatch = (
+        UiCore.AccessibleRole? role,
+        string? label,
+        string? description,
+        boolean? hidden
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Expression sources
+    -- ------------------------------------------------------------------------
+    -- These are authored DS expressions that resolve to concrete values later.
+    ColorExpr = LiteralColor(UiCore.Color value)
+              | TokenColor(DesignCore.TokenRef token)
+              | RoleColor(DesignCore.RoleRef role)
+
+    NumberExpr = LiteralNumber(number value)
+               | TokenNumber(DesignCore.TokenRef token)
+               | RoleNumber(DesignCore.RoleRef role)
+
+    FontExpr = LiteralFont(UiCore.FontRef value)
+             | TokenFont(DesignCore.TokenRef token)
+             | RoleFont(DesignCore.RoleRef role)
+
+    TextStyleExpr = (
+        FontExpr? font,
+        NumberExpr? size_px,
+        UiCore.FontWeight? weight,
+        UiCore.FontSlant? slant,
+        NumberExpr? letter_spacing_px,
+        NumberExpr? line_height_px,
+        ColorExpr? color
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Enforcement surface
+    -- ------------------------------------------------------------------------
+    -- Policies apply to the whole design system.
+    -- Constraints apply to individual recipes.
+    --
+    -- These are explicit source-language rules, not lint conventions.
+    Policy = RequireThemeCoverage(
+                 DesignCore.PolicyRef id
+             )
+           | RequireRoleCoverage(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidLiteralColors(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidLiteralNumbers(
+                 DesignCore.PolicyRef id,
+                 DesignCore.NumberKind kind
+             )
+           | ForbidUndeclaredVariants(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidUndeclaredSlots(
+                 DesignCore.PolicyRef id
+             )
+           | RequireAccessibleText(
+                 DesignCore.PolicyRef id
+             )
+
+    Constraint = RequireSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | RequireVariantAxis(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.VariantAxisRef axis
+                 )
+               | ForbidVariantCombo(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.VariantSelection* when
+                 )
+               | RequireSlotContent(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | RequireStateRule(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.StateTag state,
+                     DesignCore.SlotRef slot
+                 )
+               | ForbidLiteralColorInSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | ForbidLiteralNumberInSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot,
+                     DesignCore.NumberKind kind
+                 )
+}
+
+
+
+module DesignUse {
+
+    -- ------------------------------------------------------------------------
+    -- Recipe application surface.
+    --
+    -- This is intentionally SMALL.
+    -- It selects a recipe, theme, mode, variants, and slot bindings.
+    --
+    -- Important:
+    --   DesignUse does NOT become a second general-purpose UI tree language.
+    --   App/widget code still owns the actual UI tree.
+    --   DesignUse only names:
+    --     - which recipe is used
+    --     - which variants/states are active
+    --     - what content is bound into recipe slots
+    -- ------------------------------------------------------------------------
+
+    Instance = (
+        DesignCore.RecipeRef recipe,
+        DesignCore.ThemeRef? theme,
+        DesignCore.ModeRef? mode,
+        DesignCore.VariantSelection* variants,
+        DesignCore.StateTag* states,
+        SlotBinding* slots,
+        UiCore.SemanticRef? semantic_ref
+    ) unique
+
+    -- SlotBinding:
+    --   App/widget lowering binds content into slots.
+    --
+    --   Note:
+    --     child/children bindings refer to APP-OWNED semantic children.
+    --     This avoids making DesignUse itself the owner of a recursive UI tree.
+    SlotBinding = BindText(
+                      DesignCore.SlotRef slot,
+                      UiCore.TextValue value
+                  )
+                | BindImage(
+                      DesignCore.SlotRef slot,
+                      UiCore.ImageRef image
+                  )
+                | BindChild(
+                      DesignCore.SlotRef slot,
+                      UiCore.SemanticRef child
+                  )
+                | BindChildren(
+                      DesignCore.SlotRef slot,
+                      UiCore.SemanticRef* children
+                  )
+}
+
+
+
+module DesignResolved {
+
+    -- ------------------------------------------------------------------------
+    -- Resolved design-system phase.
+    --
+    -- Resolution consumes:
+    --   - token / role references
+    --   - theme / mode overrides
+    --   - text-style composition
+    --   - value-kind validation
+    --
+    -- The result is concrete DS data that app/widget lowering applies while
+    -- constructing UiDecl.
+    --
+    -- Important:
+    --   This phase resolves VALUES, not recipe application.
+    --   Recipe application remains a separate lowering concern because it
+    --   combines DS structure with app/widget content.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        number version,
+        DesignCore.ThemeRef? default_theme,
+        Theme* themes,
+        Recipe* recipes,
+        Policy* policies
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Resolved themes
+    -- ------------------------------------------------------------------------
+    Theme = (
+        DesignCore.ThemeRef id,
+        string name,
+        DesignCore.ModeRef default_mode,
+        Mode* modes
+    ) unique
+
+    Mode = (
+        DesignCore.ModeRef id,
+        string name,
+        TokenValue* tokens,
+        RoleValue* roles
+    ) unique
+
+    TokenValue = ColorToken(
+                     DesignCore.TokenRef id,
+                     string name,
+                     UiCore.Color value
+                 )
+               | NumberToken(
+                     DesignCore.TokenRef id,
+                     string name,
+                     DesignCore.NumberKind kind,
+                     number value
+                 )
+               | FontToken(
+                     DesignCore.TokenRef id,
+                     string name,
+                     UiCore.FontRef value
+                 )
+
+    RoleValue = ColorRole(
+                    DesignCore.RoleRef id,
+                    string name,
+                    UiCore.Color value
+                )
+              | NumberRole(
+                    DesignCore.RoleRef id,
+                    string name,
+                    DesignCore.NumberKind kind,
+                    number value
+                )
+              | FontRole(
+                    DesignCore.RoleRef id,
+                    string name,
+                    UiCore.FontRef value
+                )
+              | TextRole(
+                    DesignCore.RoleRef id,
+                    string name,
+                    TextStyle value
+                )
+
+    TextStyle = (
+        UiCore.FontRef? font,
+        number? size_px,
+        UiCore.FontWeight? weight,
+        UiCore.FontSlant? slant,
+        number? letter_spacing_px,
+        number? line_height_px,
+        UiCore.Color? color
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Resolved recipes
+    -- ------------------------------------------------------------------------
+    -- Structural vocabulary remains the same:
+    -- recipes, slots, axes, rules, and constraints stay explicit.
+    --
+    -- What changes is that all patch expressions are now concrete values.
+    Recipe = (
+        DesignCore.RecipeRef id,
+        string name,
+        DesignCore.SlotRef root_slot,
+        Slot* slots,
+        VariantAxis* variant_axes,
+        Rule* rules,
+        Constraint* constraints
+    ) unique
+
+    Slot = (
+        DesignCore.SlotRef id,
+        string name,
+        DesignCore.SlotKind kind,
+        UiCore.Role element_role,
+        DesignCore.SlotFlags flags,
+        DesignCore.SlotRef* children,
+        Patch base
+    ) unique
+
+    VariantAxis = (
+        DesignCore.VariantAxisRef id,
+        string name,
+        boolean required,
+        VariantValue* values
+    ) unique
+
+    VariantValue = (
+        DesignCore.VariantValueRef id,
+        string name
+    ) unique
+
+    Rule = VariantRule(
+               DesignCore.VariantSelection* when,
+               SlotPatch* patches
+           )
+         | StateRule(
+               DesignCore.StateSelector when,
+               SlotPatch* patches
+           )
+
+    SlotPatch = (
+        DesignCore.SlotRef slot,
+        Patch patch
+    ) unique
+
+    Patch = (
+        LayoutPatch? layout,
+        PaintPatch? paint,
+        ContentPatch? content,
+        AffordancePatch? affordance,
+        AccessibilityPatch? accessibility
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Resolved layout patch
+    -- ------------------------------------------------------------------------
+    LayoutPatch = (
+        SizeSpec? width,
+        SizeSpec? height,
+        Position? position,
+        UiCore.Flow? flow,
+        GridTemplate? grid,
+        UiCore.GridCell? cell,
+        UiCore.MainAlign? main_align,
+        UiCore.CrossAlign? cross_align,
+        UiCore.Insets? padding,
+        UiCore.Insets? margin,
+        number? gap,
+        UiCore.Overflow? overflow_x,
+        UiCore.Overflow? overflow_y,
+        UiCore.Aspect? aspect
+    ) unique
+
+    SizeSpec = (
+        Measure min,
+        Measure preferred,
+        Measure max
+    ) unique
+
+    Measure = Auto()
+            | Px(number value)
+            | Percent(number value)
+            | Content()
+            | Flex(number weight)
+
+    Edge = Unset()
+         | EdgePx(number value)
+         | EdgePercent(number value)
+
+    -- Anchoring still targets slots here.
+    -- Slot refs become concrete UiDecl element ids only during recipe use.
+    Position = InFlow()
+             | Absolute(
+                   Edge left,
+                   Edge top,
+                   Edge right,
+                   Edge bottom
+               )
+             | Anchored(
+                   DesignCore.SlotRef target,
+                   UiCore.AnchorX self_x,
+                   UiCore.AnchorY self_y,
+                   UiCore.AnchorX target_x,
+                   UiCore.AnchorY target_y,
+                   number dx,
+                   number dy
+               )
+
+    Track = AutoTrack()
+          | PxTrack(number value)
+          | ContentTrack()
+          | FlexTrack(number weight)
+
+    GridTemplate = (
+        Track* columns,
+        Track* rows,
+        number column_gap,
+        number row_gap,
+        UiCore.AutoFlow auto_flow
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Resolved paint patch
+    -- ------------------------------------------------------------------------
+    PaintPatch = (
+        PaintDecoration* ops
+    ) unique
+
+    PaintDecoration = Box(
+                          UiCore.Brush fill,
+                          UiCore.Brush? stroke,
+                          number stroke_width,
+                          UiCore.StrokeAlign align,
+                          UiCore.Corners corners
+                      )
+                    | Shadow(
+                          UiCore.Brush brush,
+                          number blur,
+                          number spread,
+                          number dx,
+                          number dy,
+                          UiCore.ShadowKind kind,
+                          UiCore.Corners corners
+                      )
+                    | Clip(
+                          UiCore.Corners corners
+                      )
+                    | Opacity(
+                          number value
+                      )
+                    | Transform(
+                          UiCore.Transform2D xform
+                      )
+                    | Blend(
+                          UiCore.BlendMode mode
+                      )
+                    | CustomPaint(
+                          number kind,
+                          number payload
+                      )
+
+    -- ------------------------------------------------------------------------
+    -- Resolved content patch
+    -- ------------------------------------------------------------------------
+    ContentPatch = NoContent()
+                 | TextContent(
+                       TextStyle style,
+                       UiCore.TextLayout layout
+                   )
+                 | ImageContent(
+                       UiCore.ImageStyle style
+                   )
+
+    -- ------------------------------------------------------------------------
+    -- Resolved affordance patch
+    -- ------------------------------------------------------------------------
+    AffordancePatch = (
+        HitPolicy? hit,
+        FocusAffordance? focus,
+        UiCore.CursorRef? hover_cursor,
+        ScrollAffordance? scroll,
+        EditAffordance? edit,
+        DragDropAffordance? drag_drop
+    ) unique
+
+    HitPolicy = HitNone()
+              | HitSelf()
+              | HitSelfAndChildren()
+              | HitChildrenOnly()
+
+    FocusAffordance = NoFocus()
+                    | Focusable(
+                          UiCore.FocusMode mode,
+                          number? order
+                      )
+
+    ScrollAffordance = Scrollable(
+                           UiCore.Axis axis
+                       )
+
+    EditAffordance = Editable(
+                         boolean multiline,
+                         boolean read_only
+                     )
+
+    DragDropAffordance = Draggable(
+                             number? payload_kind
+                         )
+                       | DropTarget(
+                             UiCore.DropPolicy policy
+                         )
+
+    -- ------------------------------------------------------------------------
+    -- Resolved accessibility patch
+    -- ------------------------------------------------------------------------
+    AccessibilityPatch = (
+        UiCore.AccessibleRole? role,
+        string? label,
+        string? description,
+        boolean? hidden
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Resolved enforcement surface
+    -- ------------------------------------------------------------------------
+    -- Policies and constraints remain explicit so tooling and validation can
+    -- report errors in design-system terms rather than in lowered UI terms.
+    Policy = RequireThemeCoverage(
+                 DesignCore.PolicyRef id
+             )
+           | RequireRoleCoverage(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidLiteralColors(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidLiteralNumbers(
+                 DesignCore.PolicyRef id,
+                 DesignCore.NumberKind kind
+             )
+           | ForbidUndeclaredVariants(
+                 DesignCore.PolicyRef id
+             )
+           | ForbidUndeclaredSlots(
+                 DesignCore.PolicyRef id
+             )
+           | RequireAccessibleText(
+                 DesignCore.PolicyRef id
+             )
+
+    Constraint = RequireSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | RequireVariantAxis(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.VariantAxisRef axis
+                 )
+               | ForbidVariantCombo(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.VariantSelection* when
+                 )
+               | RequireSlotContent(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | RequireStateRule(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.StateTag state,
+                     DesignCore.SlotRef slot
+                 )
+               | ForbidLiteralColorInSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot
+                 )
+               | ForbidLiteralNumberInSlot(
+                     DesignCore.ConstraintRef id,
+                     DesignCore.SlotRef slot,
+                     DesignCore.NumberKind kind
+                 )
+}

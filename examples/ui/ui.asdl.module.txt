@@ -1,0 +1,979 @@
+-- ============================================================================
+-- Canonical UI Library ASDL Surface (Final Pass)
+-- ----------------------------------------------------------------------------
+-- This is the canonical UI layer directly under app-specific widgets.
+-- App-specific widget editors lower into UiDecl.
+--
+-- Final-pass goals:
+--   - keep the source ASDL small and canonical
+--   - one element tree, not multiple unrelated trees
+--   - layout / paint / behavior are facets on the same element identity
+--   - stable ids and semantic refs flow through all UI phases
+--   - no runtime objects, callbacks, or solved geometry in source
+--   - layout and text shaping resolve together in UiLaid
+--   - paint batching and behavior routing are sibling projections
+-- ============================================================================
+
+
+module UiCore {
+
+    -- ------------------------------------------------------------------------
+    -- Stable identities / references
+    -- ------------------------------------------------------------------------
+    ElementId     = (number value) unique
+    SemanticRef   = (number domain, number value) unique
+
+    ThemeRef      = (number value) unique
+    StyleRef      = (number value) unique
+
+    FontRef       = (number value) unique
+    ImageRef      = (number value) unique
+    CursorRef     = (number value) unique
+
+    CommandRef    = (number value) unique
+    StateRef      = (number value) unique
+    TextModelRef  = (number value) unique
+    ValueRef      = (number value) unique
+    ScrollRef     = (number value) unique
+
+    GlyphAtlasRef = (number value) unique
+
+    -- ------------------------------------------------------------------------
+    -- Geometry
+    -- ------------------------------------------------------------------------
+    Point = (
+        number x,
+        number y
+    ) unique
+
+    Size = (
+        number w,
+        number h
+    ) unique
+
+    Rect = (
+        number x,
+        number y,
+        number w,
+        number h
+    ) unique
+
+    Insets = (
+        number top,
+        number right,
+        number bottom,
+        number left
+    ) unique
+
+    Corners = (
+        number top_left,
+        number top_right,
+        number bottom_right,
+        number bottom_left
+    ) unique
+
+    Transform2D = (
+        number m11, number m12,
+        number m21, number m22,
+        number tx,  number ty
+    ) unique
+
+    Aspect = (
+        number width,
+        number height
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout vocabulary
+    -- ------------------------------------------------------------------------
+    Axis = Horizontal()
+         | Vertical()
+         | Both()
+
+    Flow = None()
+         | Row()
+         | Column()
+         | Stack()
+         | Wrap(Axis axis)
+         | Grid()
+
+    MainAlign = Start()
+              | Center()
+              | End()
+              | SpaceBetween()
+              | SpaceAround()
+              | SpaceEvenly()
+
+    CrossAlign = CrossStart()
+               | CrossCenter()
+               | CrossEnd()
+               | Stretch()
+
+    Overflow = Visible()
+             | Hidden()
+             | Scroll()
+             | Auto()
+
+    Measure = Auto()
+            | Px(number value)
+            | Percent(number value)
+            | Content()
+            | Flex(number weight)
+
+    EdgeMeasure = Unset()
+                | EdgePx(number value)
+                | EdgePercent(number value)
+
+    SizeSpec = (
+        Measure min,
+        Measure preferred,
+        Measure max
+    ) unique
+
+    Track = AutoTrack()
+          | PxTrack(number value)
+          | ContentTrack()
+          | FlexTrack(number weight)
+
+    AutoFlow = ByRow()
+             | ByColumn()
+
+    GridTemplate = (
+        Track* columns,
+        Track* rows,
+        number column_gap,
+        number row_gap,
+        AutoFlow auto_flow
+    ) unique
+
+    GridCell = (
+        number column_start,
+        number column_span,
+        number row_start,
+        number row_span
+    ) unique
+
+    AnchorX = Left()
+            | CenterX()
+            | Right()
+
+    AnchorY = Top()
+            | CenterY()
+            | Bottom()
+
+    Position = InFlow()
+             | Absolute(
+                   EdgeMeasure left,
+                   EdgeMeasure top,
+                   EdgeMeasure right,
+                   EdgeMeasure bottom
+               )
+             | Anchored(
+                   ElementId target,
+                   AnchorX self_x,
+                   AnchorY self_y,
+                   AnchorX target_x,
+                   AnchorY target_y,
+                   number dx,
+                   number dy
+               )
+
+    -- ------------------------------------------------------------------------
+    -- Paint vocabulary
+    -- ------------------------------------------------------------------------
+    Color = (
+        number r,
+        number g,
+        number b,
+        number a
+    ) unique
+
+    Stop = (
+        number t,
+        Color color
+    ) unique
+
+    Brush = Solid(Color color)
+          | LinearGradient(Stop* stops, Point from, Point to)
+          | RadialGradient(Stop* stops, Point center, number radius)
+
+    StrokeAlign = Inside()
+                | CenterStroke()
+                | Outside()
+
+    ShadowKind = DropShadow()
+               | InnerShadow()
+
+    BlendMode = BlendNormal()
+              | BlendMultiply()
+              | BlendScreen()
+              | BlendOverlay()
+              | BlendAdd()
+
+    -- ------------------------------------------------------------------------
+    -- Text vocabulary
+    -- ------------------------------------------------------------------------
+    FontWeight = Weight100()
+               | Weight200()
+               | Weight300()
+               | Weight400()
+               | Weight500()
+               | Weight600()
+               | Weight700()
+               | Weight800()
+               | Weight900()
+
+    FontSlant = Roman()
+              | Italic()
+              | Oblique()
+
+    TextWrap = NoWrap()
+             | WrapWord()
+             | WrapChar()
+
+    TextOverflow = ClipText()
+                 | Ellipsis()
+
+    TextAlign = TextStart()
+              | TextCenter()
+              | TextEnd()
+              | Justify()
+
+    TextValue = Literal(string value)
+              | Bound(ValueRef ref)
+
+    TextStyle = (
+        FontRef? font,
+        number? size_px,
+        FontWeight? weight,
+        FontSlant? slant,
+        number? letter_spacing_px,
+        number? line_height_px,
+        Color? color
+    ) unique
+
+    TextLayout = (
+        TextWrap wrap,
+        TextOverflow overflow,
+        TextAlign align,
+        number line_limit
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Image vocabulary
+    -- ------------------------------------------------------------------------
+    ImageFit = Fill()
+             | Contain()
+             | Cover()
+             | StretchImage()
+             | CenterImage()
+
+    ImageSampling = Nearest()
+                  | Linear()
+
+    ImageStyle = (
+        ImageFit fit,
+        ImageSampling sampling,
+        number opacity,
+        Corners corners
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Interaction vocabulary
+    -- ------------------------------------------------------------------------
+    PointerButton = Primary()
+                  | Middle()
+                  | Secondary()
+                  | Button4()
+                  | Button5()
+
+    KeyEvent = KeyDown()
+             | KeyUp()
+             | KeyRepeat()
+
+    KeyChord = (
+        boolean ctrl,
+        boolean alt,
+        boolean shift,
+        boolean meta,
+        number keycode
+    ) unique
+
+    Gesture = Tap()
+            | DoubleTap()
+            | LongPress()
+            | Drag()
+            | Pan()
+
+    FocusMode = TabFocus()
+              | ClickFocus()
+              | ProgrammaticFocus()
+              | TextFocus()
+
+    ToggleValue = Off()
+                | On()
+                | Mixed()
+
+    DragPayload = Opaque(number kind, number value)
+                | Semantic(SemanticRef ref)
+
+    DropPolicy = AcceptAny()
+               | AcceptKind(number kind)
+               | AcceptSemantic(number domain)
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility
+    -- ------------------------------------------------------------------------
+    AccessibleRole = AccNone()
+                   | AccGroup()
+                   | AccText()
+                   | AccImage()
+                   | AccButton()
+                   | AccToggle()
+                   | AccTextbox()
+                   | AccList()
+                   | AccListItem()
+                   | AccScrollArea()
+                   | AccDialog()
+                   | AccCustom(number kind)
+
+    -- ------------------------------------------------------------------------
+    -- Solved helpers for downstream phases
+    -- ------------------------------------------------------------------------
+    ClipShape = ClipRect(Rect rect)
+              | ClipRoundedRect(Rect rect, Corners corners)
+
+    HitShape = HitRect(Rect rect)
+             | HitRoundedRect(Rect rect, Corners corners)
+
+    ScrollExtent = (
+        number content_w,
+        number content_h,
+        number offset_x,
+        number offset_y
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Small role vocabulary
+    -- ------------------------------------------------------------------------
+    Role = View()
+         | TextRole()
+         | ImageRole()
+         | ScrollPort()
+         | ClipHost()
+         | InputField()
+         | ListHost()
+         | OverlayHost()
+         | CustomRole(number kind)
+}
+
+
+
+module UiDecl {
+
+    -- ------------------------------------------------------------------------
+    -- Canonical source phase.
+    -- App-specific widgets lower into this tree.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        number version,
+        UiCore.ThemeRef? theme,
+        Root* roots,
+        Overlay* overlays
+    ) unique
+
+    Root = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root
+    ) unique
+
+    Overlay = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer
+    ) unique
+
+    -- Element:
+    --   Canonical noun for UI.
+    --   App-specific widget concepts lower to Element trees.
+    Element = (
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        Flags flags,
+        UiCore.StyleRef* style_refs,
+        Layout layout,
+        Paint paint,
+        Behavior behavior,
+        Accessibility accessibility,
+        Element* children
+    ) unique
+
+    Flags = (
+        boolean visible,
+        boolean enabled
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout facet
+    -- ------------------------------------------------------------------------
+    Layout = (
+        UiCore.SizeSpec width,
+        UiCore.SizeSpec height,
+        UiCore.Position position,
+        UiCore.Flow flow,
+        UiCore.GridTemplate? grid,
+        UiCore.GridCell? cell,
+        UiCore.MainAlign main_align,
+        UiCore.CrossAlign cross_align,
+        UiCore.Insets padding,
+        UiCore.Insets margin,
+        number gap,
+        UiCore.Overflow overflow_x,
+        UiCore.Overflow overflow_y,
+        UiCore.Aspect? aspect
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Paint facet
+    -- ------------------------------------------------------------------------
+    -- Paint is declarative visual intent, not renderer commands.
+    Paint = (
+        PaintOp* ops
+    ) unique
+
+    PaintOp = Box(
+                  UiCore.Brush fill,
+                  UiCore.Brush? stroke,
+                  number stroke_width,
+                  UiCore.Corners corners
+              )
+            | Shadow(
+                  UiCore.Brush brush,
+                  number blur,
+                  number spread,
+                  number dx,
+                  number dy,
+                  UiCore.ShadowKind kind,
+                  UiCore.Corners corners
+              )
+            | Text(
+                  UiCore.TextValue value,
+                  UiCore.TextStyle style,
+                  UiCore.TextLayout layout
+              )
+            | Image(
+                  UiCore.ImageRef image,
+                  UiCore.ImageStyle style
+              )
+            | Clip(
+                  UiCore.Corners corners
+              )
+            | Opacity(
+                  number value
+              )
+            | Transform(
+                  UiCore.Transform2D xform
+              )
+            | Blend(
+                  UiCore.BlendMode mode
+              )
+            | CustomPaint(
+                  number kind,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Behavior facet
+    -- ------------------------------------------------------------------------
+    -- Behavior is semantic interaction intent.
+    -- No callbacks, closures, runtime widget instances, or event buses.
+    Behavior = (
+        HitPolicy hit,
+        FocusPolicy focus,
+        PointerRule* pointer,
+        ScrollRule? scroll,
+        KeyRule* keys,
+        EditRule? edit,
+        DragDropRule* drag_drop
+    ) unique
+
+    HitPolicy = HitNone()
+              | HitSelf()
+              | HitSelfAndChildren()
+              | HitChildrenOnly()
+
+    FocusPolicy = NotFocusable()
+                | Focusable(
+                      UiCore.FocusMode mode,
+                      number? order
+                  )
+
+    PointerRule = Hover(
+                      UiCore.CursorRef? cursor,
+                      UiCore.CommandRef? enter,
+                      UiCore.CommandRef? leave
+                  )
+                | Press(
+                      UiCore.PointerButton button,
+                      number click_count,
+                      UiCore.CommandRef command
+                  )
+                | Toggle(
+                      UiCore.StateRef state,
+                      UiCore.ToggleValue value,
+                      UiCore.PointerButton button,
+                      UiCore.CommandRef? command
+                  )
+                | Gesture(
+                      UiCore.Gesture gesture,
+                      UiCore.CommandRef command
+                  )
+
+    ScrollRule = (
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model
+    ) unique
+
+    KeyRule = (
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    EditRule = (
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed
+    ) unique
+
+    DragDropRule = Draggable(
+                       UiCore.DragPayload payload,
+                       UiCore.CommandRef? begin,
+                       UiCore.CommandRef? finish
+                   )
+                 | DropTarget(
+                       UiCore.DropPolicy policy,
+                       UiCore.CommandRef command
+                   )
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility facet
+    -- ------------------------------------------------------------------------
+    Accessibility = (
+        UiCore.AccessibleRole role,
+        string? label,
+        string? description,
+        boolean hidden,
+        number sort_priority
+    ) unique
+}
+
+
+
+module UiLaid {
+
+    -- ------------------------------------------------------------------------
+    -- Coupled layout + text shaping phase.
+    -- Produces solved boxes, shaped text, clip facts, and normalized behavior.
+    -- ------------------------------------------------------------------------
+
+    Scene = (
+        Root* roots,
+        Overlay* overlays,
+        UiCore.Size viewport
+    ) unique
+
+    Root = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root
+    ) unique
+
+    Overlay = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer
+    ) unique
+
+    Element = (
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        boolean visible,
+        boolean enabled,
+
+        UiCore.Rect border_box,
+        UiCore.Rect padding_box,
+        UiCore.Rect content_box,
+
+        UiCore.ScrollExtent? scroll_extent,
+        UiCore.ClipShape* clip_stack,
+
+        DrawOp* draw,
+        BehaviorNode behavior,
+        Accessibility accessibility,
+
+        Element* children
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Solved visual instances
+    -- ------------------------------------------------------------------------
+    DrawOp = BoxDraw(
+                 UiCore.Rect rect,
+                 UiCore.Brush fill,
+                 UiCore.Brush? stroke,
+                 number stroke_width,
+                 UiCore.Corners corners
+             )
+           | ShadowDraw(
+                 UiCore.Rect rect,
+                 UiCore.Brush brush,
+                 number blur,
+                 number spread,
+                 number dx,
+                 number dy,
+                 UiCore.ShadowKind kind,
+                 UiCore.Corners corners
+             )
+           | TextDraw(
+                 ShapedText text
+             )
+           | ImageDraw(
+                 UiCore.ImageRef image,
+                 UiCore.Rect rect,
+                 UiCore.ImageStyle style
+             )
+           | ClipDraw(
+                 UiCore.ClipShape shape
+             )
+           | OpacityDraw(
+                 number value
+             )
+           | TransformDraw(
+                 UiCore.Transform2D xform
+             )
+           | BlendDraw(
+                 UiCore.BlendMode mode
+             )
+           | CustomDraw(
+                 number kind,
+                 number payload,
+                 UiCore.Rect bounds
+             )
+
+    ShapedText = (
+        UiCore.Rect bounds,
+        number baseline_y,
+        ShapedLine* lines
+    ) unique
+
+    ShapedLine = (
+        number baseline_y,
+        UiCore.Rect ink_bounds,
+        ShapedRun* runs
+    ) unique
+
+    ShapedRun = (
+        UiCore.FontRef font,
+        number size_px,
+        UiCore.Color color,
+        Glyph* glyphs
+    ) unique
+
+    Glyph = (
+        number glyph_id,
+        number cluster,
+        UiCore.Point origin,
+        UiCore.Rect ink_bounds
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Normalized behavior facts
+    -- ------------------------------------------------------------------------
+    BehaviorNode = (
+        UiCore.HitShape? hit_shape,
+        FocusNode? focus,
+        PointerNode* pointer,
+        ScrollNode? scroll,
+        KeyNode* keys,
+        EditNode? edit,
+        DragDropNode* drag_drop
+    ) unique
+
+    FocusNode = (
+        UiCore.FocusMode mode,
+        number order,
+        UiCore.Rect bounds
+    ) unique
+
+    PointerNode = Hover(
+                      UiCore.CursorRef? cursor,
+                      UiCore.CommandRef? enter,
+                      UiCore.CommandRef? leave
+                  )
+                | Press(
+                      UiCore.PointerButton button,
+                      number click_count,
+                      UiCore.CommandRef command
+                  )
+                | Toggle(
+                      UiCore.StateRef state,
+                      UiCore.ToggleValue value,
+                      UiCore.PointerButton button,
+                      UiCore.CommandRef? command
+                  )
+                | Gesture(
+                      UiCore.Gesture gesture,
+                      UiCore.CommandRef command
+                  )
+
+    ScrollNode = (
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model,
+        UiCore.Rect viewport,
+        UiCore.Size content_size
+    ) unique
+
+    KeyNode = (
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    EditNode = (
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed,
+        UiCore.Rect bounds
+    ) unique
+
+    DragDropNode = Draggable(
+                       UiCore.DragPayload payload,
+                       UiCore.CommandRef? begin,
+                       UiCore.CommandRef? finish
+                   )
+                 | DropTarget(
+                       UiCore.DropPolicy policy,
+                       UiCore.CommandRef command
+                   )
+
+    Accessibility = (
+        UiCore.AccessibleRole role,
+        string? label,
+        string? description,
+        boolean hidden,
+        number sort_priority,
+        UiCore.Rect bounds
+    ) unique
+}
+
+
+
+module UiBatched {
+
+    -- ------------------------------------------------------------------------
+    -- Paint-domain projection from UiLaid.
+    -- Renderer-friendly batch plan, still pure canonical data.
+    -- ------------------------------------------------------------------------
+
+    Scene = (
+        ClipEntry* clips,
+        Batch* batches,
+        UiCore.Rect bounds
+    ) unique
+
+    ClipEntry = (
+        number id,
+        UiCore.ClipShape shape
+    ) unique
+
+    Batch = BoxBatch(
+                number sort_key,
+                number? clip_id,
+                BoxItem* items
+            )
+          | ShadowBatch(
+                number sort_key,
+                number? clip_id,
+                ShadowItem* items
+            )
+          | ImageBatch(
+                number sort_key,
+                number? clip_id,
+                UiCore.ImageRef image,
+                UiCore.ImageSampling sampling,
+                ImageItem* items
+            )
+          | GlyphBatch(
+                number sort_key,
+                number? clip_id,
+                UiCore.FontRef font,
+                UiCore.GlyphAtlasRef atlas,
+                GlyphItem* items
+            )
+          | EffectBatch(
+                number sort_key,
+                number? clip_id,
+                EffectItem* items
+            )
+          | CustomBatch(
+                number sort_key,
+                number? clip_id,
+                number kind,
+                number payload
+            )
+
+    BoxItem = (
+        UiCore.Rect rect,
+        UiCore.Brush fill,
+        UiCore.Brush? stroke,
+        number stroke_width,
+        UiCore.Corners corners
+    ) unique
+
+    ShadowItem = (
+        UiCore.Rect rect,
+        UiCore.Brush brush,
+        number blur,
+        number spread,
+        number dx,
+        number dy,
+        UiCore.ShadowKind kind,
+        UiCore.Corners corners
+    ) unique
+
+    ImageItem = (
+        UiCore.Rect rect,
+        UiCore.ImageStyle style
+    ) unique
+
+    GlyphItem = (
+        number glyph_id,
+        UiCore.Point origin,
+        UiCore.Color color
+    ) unique
+
+    EffectItem = PushOpacity(number value)
+               | PopOpacity()
+               | PushTransform(UiCore.Transform2D xform)
+               | PopTransform()
+               | PushBlend(UiCore.BlendMode mode)
+               | PopBlend()
+               | PushClip(number clip_id)
+               | PopClip()
+}
+
+
+
+module UiRouted {
+
+    -- ------------------------------------------------------------------------
+    -- Behavior-domain projection from UiLaid.
+    -- Event-routing plan, not runtime callback dispatch.
+    -- ------------------------------------------------------------------------
+
+    Scene = (
+        HitEntry* hits,
+        FocusEntry* focus_chain,
+        PointerRoute* pointer_routes,
+        ScrollRoute* scroll_routes,
+        KeyRoute* key_routes,
+        EditRoute* edit_routes,
+        AccessibilityNode* accessibility
+    ) unique
+
+    HitEntry = (
+        UiCore.ElementId element,
+        UiCore.SemanticRef? semantic_ref,
+        UiCore.HitShape shape,
+        number z_index
+    ) unique
+
+    FocusEntry = (
+        UiCore.ElementId element,
+        UiCore.SemanticRef? semantic_ref,
+        number order,
+        UiCore.FocusMode mode,
+        UiCore.Rect bounds
+    ) unique
+
+    PointerRoute = HoverRoute(
+                       UiCore.ElementId element,
+                       UiCore.CursorRef? cursor,
+                       UiCore.CommandRef? enter,
+                       UiCore.CommandRef? leave
+                   )
+                 | PressRoute(
+                       UiCore.ElementId element,
+                       UiCore.PointerButton button,
+                       number click_count,
+                       UiCore.CommandRef command
+                   )
+                 | ToggleRoute(
+                       UiCore.ElementId element,
+                       UiCore.StateRef state,
+                       UiCore.ToggleValue value,
+                       UiCore.PointerButton button,
+                       UiCore.CommandRef? command
+                   )
+                 | GestureRoute(
+                       UiCore.ElementId element,
+                       UiCore.Gesture gesture,
+                       UiCore.CommandRef command
+                   )
+
+    ScrollRoute = (
+        UiCore.ElementId element,
+        UiCore.SemanticRef? semantic_ref,
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model,
+        UiCore.Rect viewport,
+        UiCore.Size content_size
+    ) unique
+
+    KeyRoute = (
+        UiCore.ElementId? scope,
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    EditRoute = (
+        UiCore.ElementId element,
+        UiCore.SemanticRef? semantic_ref,
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed,
+        UiCore.Rect bounds
+    ) unique
+
+    AccessibilityNode = (
+        UiCore.ElementId element,
+        UiCore.SemanticRef? semantic_ref,
+        UiCore.AccessibleRole role,
+        string? label,
+        string? description,
+        boolean hidden,
+        number sort_priority,
+        UiCore.Rect bounds,
+        AccessibilityNode* children
+    ) unique
+}

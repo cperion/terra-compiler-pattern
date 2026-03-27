@@ -1,0 +1,3 @@
+[submodule "terra"]
+	path = terra
+	url = https://github.com/terralang/terra.git

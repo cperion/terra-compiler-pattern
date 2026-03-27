@@ -2,7 +2,7 @@
 
 ## The hard part is not the pattern. The hard part is the ASDL.
 
-The Terra Compiler Pattern gives you five primitives: ASDL unique, terralib.memoize, LuaFun, Unit, and composition wrappers. These are ~140 lines of code. They produce incremental multi-stage compilers with hot-swap, state management, error handling, and zero-alloc execution — all as emergent properties of composition.
+The Terra Compiler Pattern gives you six primitives: ASDL unique, Event ASDL, Apply, terralib.memoize, LuaFun, and Unit. The implementation is small, and the real `unit.t` includes `Unit.inspect(...)` so progress, docs, scaffolds, prompts, and tests are derived directly from the ASDL and installed methods. They produce incremental multi-stage compilers with hot-swap, state management, error handling, and zero-alloc execution — all as emergent properties of composition.
 
 But the primitives are tools. They don't tell you WHAT to compile. They don't tell you what your types should be. They don't tell you what phases to define. They don't tell you where knowledge is consumed. They don't tell you which sum types to create or when to eliminate them.
 
@@ -141,7 +141,7 @@ Spreadsheet:
     A chart type is bar OR line OR scatter OR pie.
 ```
 
-Each "or" becomes an ASDL enum. Each option becomes a variant. This is where domain expertise matters most — missing a variant means the system can't represent something the user needs. Adding a variant later means every `B.match` in the pipeline needs a new arm.
+Each "or" becomes an ASDL enum. Each option becomes a variant. This is where domain expertise matters most — missing a variant means the system can't represent something the user needs. Adding a variant later means every `Unit.match` in the pipeline needs a new arm.
 
 ### 2.4 Step 4: Find the containment hierarchy
 
@@ -432,6 +432,84 @@ Device:
 ```
 
 When fields are not orthogonal, the constraint should be visible in the types — usually as a sum type where each variant carries only the fields it needs.
+
+### 3.7 The LuaFun test
+
+For each function you write — every transition, every terminal, every reducer arm, every projection — ask: "Can I express this as a LuaFun chain?" If yes, the ASDL is well-modeled. If no, the ASDL is wrong.
+
+This is the most practical of all the quality tests. It catches problems at implementation time, not design time. You designed the ASDL, you passed the save/load test, the undo test, the completeness test. You start writing the transition function. And the code resists.
+
+```
+You need a mutable accumulator:
+    fun.iter(nodes):map(f):totable()  should work.
+    If it doesn't — if f needs state from previous iterations —
+    the nodes are not independent. They're coupled.
+    → Split the data so each node is self-contained,
+      or add a phase that resolves the coupling first.
+
+You need to look up another node by ID:
+    fun.iter(nodes):map(function(n)
+        local target = find_by_id(all_nodes, n.target_id)  -- breaking out!
+        ...
+    end)
+    → The lookup means you need context the current node doesn't carry.
+      This belongs in a Resolved phase that already linked the references.
+      After resolution, the data the node needs is ON the node.
+
+You need imperative control flow (break, early return, mutation):
+    for i, node in ipairs(nodes) do
+        if node.kind == "special" then
+            result[i] = handle_special(node)  -- can't do this in map
+        else ...
+    → The sum type should make "special" a variant.
+      Unit.match handles it. LuaFun maps over the rest.
+      The imperative control flow was compensating for a missing variant.
+```
+
+The rule is: **every function in the pure layer is a LuaFun chain.** Transitions, terminals, apply reducers, projections, helpers. All of them. If a function resists LuaFun, don't fight LuaFun — fix the ASDL. LuaFun is the quality probe that catches modeling errors at the moment you try to implement them.
+
+This is also why LuaFun is listed as a primitive, not a utility. It is the enforcement mechanism that makes the purity guarantees real. ASDL gives you immutable values. Memoize gives you identity-based caching. LuaFun gives you the guarantee that the functions operating on those values are actually pure. Without it, purity is a discipline. With it, purity is the path of least resistance.
+
+### 3.8 The Testing test
+
+For each function you write, ask: "Can I test this with nothing but an ASDL constructor and an assertion?" If yes, the design is right. If no — if you need mocks, fixtures, setup, teardown, a running server, a database, environment variables, or a specific ordering of prior calls — then the function has hidden dependencies, which means the ASDL is incomplete or the function is impure.
+
+This is not really a separate test. It is a consequence of all the other tests passing. If the ASDL is complete (3.4), minimal (3.5), orthogonal (3.6), and the functions are LuaFun chains (3.7), then testability falls out automatically. But it is worth calling out as its own checkpoint because it catches a specific failure mode: functions that look pure but reach into context.
+
+```
+The function needs a "context" or "environment" argument:
+    resolve_track(track, context)
+    → What is "context"? It carries data the track doesn't own.
+      That data belongs in a prior phase that put it ON the track.
+      After resolution, the track is self-contained.
+      The test constructs a track. No context needed.
+
+The function needs to be called in a specific order:
+    init_system()
+    load_plugins()
+    result = process(input)  -- only works after init + load
+    → The ordering dependency means hidden state.
+      In the pattern, process(input) works on any valid input,
+      regardless of what happened before. The ASDL node carries
+      everything the function needs.
+
+The function needs a mock:
+    process(input, mock_filesystem)
+    → The function is reaching outside its arguments.
+      The file system data should already be in the ASDL —
+      loaded during an earlier phase, stored as values,
+      not as live references to external systems.
+```
+
+The rule is: **every function is testable with one constructor call and one assertion.** If it needs more, trace the extra dependency back to the ASDL. Either the data is missing (incomplete ASDL), the phases are wrong (unresolved coupling), or the function is impure (escaping LuaFun). The fix is always upstream, never at the test site.
+
+This also means the entire testing infrastructure dissolves:
+- **No test framework** — setup/teardown have nothing to set up.
+- **No mocks** — pure functions have no external dependencies.
+- **No fixtures** — ASDL constructors are self-contained.
+- **No regression suite** — memoize is the regression oracle. Same input to changed function: if memoize recomputes, behavior changed.
+- **No property testing library** — ASDL types define the space of valid inputs. Random testing is: random ASDL constructor arguments → call function → assert structural properties.
+- **No flaky tests** — pure functions produce the same output for the same input. Always.
 
 ---
 
@@ -822,7 +900,7 @@ local new_project = T.Editor.Project(
 -- Track 2 is new. Memoize misses. Only Track 2 recompiles.
 ```
 
-Or with `B.with`:
+Or with `Unit.with`:
 
 ```lua
 local new_track = Unit.with(old_track, { volume_db = -3 })
@@ -874,7 +952,70 @@ This is why ASDL `unique` is essential. It guarantees that structurally identica
 
 ---
 
-## 7. Designing the View / UI Projection
+## 7. Parallelism Falls Out of the ASDL
+
+The ASDL dependency graph IS the execution plan. Multithreading, parallelization, and execution planning are not features you add on top — they are properties you READ from the ASDL structure.
+
+### 7.1 The graph encodes the dependencies
+
+An ASDL tree is a DAG of immutable values. Every node knows its children. Every memoized function depends only on its explicit arguments. The dependency structure is fully visible before any compilation happens:
+
+```
+        Project
+       /       \
+    Track1     Track2
+    /   \       /   \
+  Dev1  Dev2  Dev3  Dev4
+  |     |     |     |
+ Node1 Node2 Node3 Node4
+```
+
+Nodes that don't share ancestors are independent. Track1 and Track2 can compile in parallel. All four leaf nodes can compile in parallel. The graph tells you which work is independent — you don't need to discover it at runtime with a dependency analysis framework.
+
+### 7.2 Why this works
+
+The pattern's purity guarantees make parallelism safe by construction:
+
+- **Memoized functions are pure.** They depend only on their explicit arguments. No shared mutable state, no side effects, no ordering requirements.
+- **ASDL nodes are immutable.** Once constructed, they never change. Two parallel threads reading the same node see the same value.
+- **Memoize handles deduplication.** If two parallel branches reach the same shared subnode, one compiles and caches, the other gets a cache hit.
+- **Identity is structural.** ASDL `unique` means the same arguments produce the same object. No race on identity — identity is determined at construction.
+
+Traditional architectures need thread pools, schedulers, synchronization primitives, and dependency graphs as SEPARATE INFRASTRUCTURE because their dependency information is scattered across mutable state, callbacks, and implicit ordering. The pattern concentrates all dependencies in one place — the ASDL tree — and makes them immutable.
+
+### 7.3 The modeling consequence
+
+This has a direct consequence for ASDL design: **the granularity of your ASDL nodes determines the granularity of your parallelism.**
+
+```
+TOO COARSE:
+    Project = (Track* tracks, ...) unique
+    compile_project = memoize(function(project) ... end)
+    → One node. No parallelism. Everything is sequential.
+
+RIGHT:
+    Track = (number id, Device* devices, ...) unique
+    compile_track = memoize(function(track, sr) ... end)
+    → N tracks. N-way parallelism for independent tracks.
+    → Plus M-way parallelism within each track for independent devices.
+
+TOO FINE:
+    Sample = (number value) unique
+    compile_sample = memoize(function(sample) ... end)
+    → Millions of nodes. Parallelism overhead dominates.
+```
+
+The same granularity that gives you good incrementality (Section 6) also gives you good parallelism. One memoize boundary per identity noun means one unit of parallelism per identity noun. The design choices compose.
+
+### 7.4 What this eliminates
+
+No thread pool. No task queue. No fork-join framework. No dependency graph library. No work-stealing scheduler. No futures or promises for compilation coordination. The ASDL graph is all of these things — it just doesn't know it.
+
+This is the same pattern as every other "eliminated" system: the information already exists in the ASDL structure. Building a separate system to represent it is redundant. Building a separate system to manage it is reconciliation work that shouldn't exist.
+
+---
+
+## 8. Designing the View / UI Projection
 
 Every program has at least two pipelines from the same source:
 
@@ -886,7 +1027,7 @@ Source ASDL ──transition──> ... ──terminal──> Execution Unit
 
 The execution pipeline produces the domain output (audio, computed cells, game frame). The view pipeline produces the visual representation (pixels on screen). Both start from the same source ASDL. Both are memoized independently. Editing the source recompiles both — but only the changed subtrees.
 
-### 7.1 The View is NOT the source
+### 8.1 The View is NOT the source
 
 The View ASDL is different from the source ASDL. The source represents the user's domain model. The View represents the visual presentation of that model. They are different shapes:
 
@@ -911,7 +1052,7 @@ Source (DAW):                          View:
 
 The same Track appears in three places in the View: the track header, the mixer strip, and the device panel. The View is not a mirror of the source — it is a PROJECTION. One source entity can appear multiple times. Some source entities don't appear at all (depending on what's visible). The View adds layout, sizing, colors, labels, and interaction behaviors that don't exist in the source.
 
-### 7.2 The View's own phase pipeline
+### 8.2 The View's own phase pipeline
 
 The View has its own phases:
 
@@ -929,7 +1070,7 @@ View.Compiled   Unit { fn, state_t } — one function, all GL calls
 
 The projection boundary (`source → View.Decl`) is a `transition` or `projection` function. The View pipeline from Decl to Compiled is its own sequence of transitions and terminals.
 
-### 7.3 The semantic ref connection
+### 8.3 The semantic ref connection
 
 Errors from the domain pipeline carry semantic refs (TrackRef, DeviceRef, ClipRef). The View knows which visual elements correspond to which semantic refs (because the projection maintained the mapping). When an error says `DeviceRef(42) failed`, the View finds the visual element for Device 42 and shows the error there.
 
@@ -937,9 +1078,9 @@ This works because the source ASDL node identity (the `id` field) flows through 
 
 ---
 
-## 8. Common Modeling Mistakes
+## 9. Common Modeling Mistakes
 
-### 8.1 Modeling the implementation instead of the domain
+### 9.1 Modeling the implementation instead of the domain
 
 ```
 WRONG (implementation model):
@@ -953,7 +1094,7 @@ RIGHT (domain model):
 
 The implementation model describes HOW the program works. The domain model describes WHAT the user works with. The pattern compiles the domain model INTO the implementation. If you put the implementation in the source, you're compiling the compiler.
 
-### 8.2 Mixing phases
+### 9.2 Mixing phases
 
 ```
 WRONG (mixing source and derived):
@@ -969,7 +1110,7 @@ RIGHT (source only):
     -- Buffer slots are assigned in the Scheduled phase.
 ```
 
-### 8.3 Over-flattening
+### 9.3 Over-flattening
 
 ```
 WRONG (too flat — loses structure):
@@ -986,7 +1127,7 @@ RIGHT (structured):
     -- touch Track 1's ASDL node. Memoize hits on Track 1.
 ```
 
-### 8.4 Under-flattening
+### 9.4 Under-flattening
 
 ```
 WRONG (too nested — redundant wrapping):
@@ -1003,13 +1144,13 @@ RIGHT (flat enough):
     -- If it's a view decision, it belongs in the View ASDL.
 ```
 
-### 8.5 Missing a phase
+### 9.5 Missing a phase
 
 Symptom: a boundary function is doing two unrelated things. It resolves cross-references AND assigns buffer slots. It lowers containers AND validates connections.
 
 Fix: split into two phases. Each boundary should do ONE kind of knowledge consumption. If it does two, you're missing a phase between them.
 
-### 8.6 Using strings where enums belong
+### 9.6 Using strings where enums belong
 
 ```
 WRONG:
@@ -1023,7 +1164,7 @@ RIGHT:
              | Gain { db: number }
              | Sine { freq: number }
              | ...
-    -- Each variant has its own fields. B.match is exhaustive.
+    -- Each variant has its own fields. Unit.match is exhaustive.
     -- Adding a variant forces all match sites to handle it.
 ```
 
@@ -1032,9 +1173,71 @@ Strings are bags. Enums are types. Every string that represents a fixed set of o
 
 ---
 
-## 9. Worked Examples
+## 10. The Implementation Discovery
 
-### 9.1 Text editor
+The modeling method (Sections 1-6) gives you a first draft of the ASDL. That draft is a hypothesis. Implementation tests it. The testing direction is bottom-up: start at the leaves, let each leaf tell you what the layers above must provide, and fix the ASDL from the bottom up.
+
+### 10.1 Write the leaf you want to write
+
+Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one ASDL node and produces a Unit for the machine. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
+
+The leaf immediately tells you what the node must contain. A sine oscillator leaf needs frequency, waveform shape, gain. A biquad filter leaf needs pre-computed coefficients. A text renderer leaf needs resolved font metrics and glyph positions. If the ASDL node doesn't have those fields — if the leaf can't get what it needs from its single argument — the ASDL is wrong.
+
+Don't fix the leaf. Fix the layer above.
+
+### 10.2 Modify the layer above
+
+The leaf said: "I need frequency on this node." The node is produced by a phase transition. Go to that transition. It must now put frequency onto the node. To do that, it needs frequency from ITS input. If its input doesn't have it, go one layer higher.
+
+```
+leaf:              "I need resolved coefficients"
+    ↓
+scheduling:        "I need coefficients to schedule — get from classified"
+    ↓
+classification:    "I need filter type to classify — get from authored"
+    ↓
+lowering:          "I need filter type in authored — get from source"
+    ↓
+source ASDL:       add filter_type field to the filter node
+```
+
+This is the recursive process: each layer is shaped by the demands of the layer below it. The source ASDL is the LAST thing that settles, not the first. The modeling method gave you a draft. The leaves correct it.
+
+### 10.3 Why this gives the earliest ASDL warnings
+
+The leaf compiler is the smallest function in the system — 10-20 lines. It is also the most honest function. It has no room to hide a bad ASDL.
+
+```
+Missing field           → ASDL is incomplete, add to source and propagate
+LuaFun resistance       → prior phase didn't resolve a coupling
+Trivial function        → identity noun is too fine-grained (merge nodes)
+Enormous function       → identity noun is too coarse (split the type)
+Needs sibling context   → containment hierarchy is wrong
+Needs global lookup     → missing resolution phase
+```
+
+Every one of these is a specific ASDL fix, not a code fix. The leaf is the probe. It discovers the ASDL's flaws at the cheapest possible moment — before you've written the transitions, the composition, the event handling.
+
+### 10.4 The design cycle
+
+Design and implementation are not sequential. They interleave.
+
+```
+DESIGN (top-down):        model the domain → draft ASDL → draft phases
+IMPLEMENT (bottom-up):    write leaf → leaf demands → fix layer above → recurse
+CONVERGE:                 the ASDL stabilizes when leaves stop demanding changes
+```
+
+You model a bit (Sections 1-6), implement a leaf, discover the model is wrong, fix it, implement the next leaf. The modeling method tells you WHERE to look — which nouns, which phases, which coupling points. The leaves tell you WHAT to put there — which fields, which resolutions, which phase boundaries. Neither works alone. Together, they converge on the correct ASDL: the one where every leaf is a natural LuaFun chain and every phase transition is obvious.
+
+The convergence criterion is: **every leaf compiles as a clean LuaFun chain with no reaching, no context arguments, no sibling lookups.** When that's true, the ASDL is done. When it's not, the resistance tells you exactly what to fix and where.
+
+
+---
+
+## 11. Worked Examples
+
+### 11.1 Text editor
 
 **Nouns**: document, paragraph, heading, list, code block, text run, character, cursor, selection, font, style, image, link
 
@@ -1093,7 +1296,16 @@ module Editor {
 - Minimality: ✓ bold and italic are independent booleans in Style
 - Orthogonality: ✓ Span kind and Style are independent
 
-### 9.2 Spreadsheet
+**What falls out of this modeling**:
+- Incremental rendering: keystroke changes one Line/Span → memoize caches all others → one line recompiles
+- Undo: previous Document node → memoize cache hit → instant, no undo stack
+- Modal editing (if vim-style): Mode is a sum type in the reducer, not a state machine
+- Syntax highlighting: second terminal from the same Line nodes, memoized per line
+- Multiple windows: same Buffer node referenced by two Windows → memoize hits on shared compilation
+- Search/replace: new Line nodes for affected lines only → 3 replacements in 10,000 lines recompiles 3 lines
+- Parallelism: independent Blocks compile in parallel — the ASDL tree is the execution plan
+
+### 11.2 Spreadsheet
 
 **Sum types**:
 ```
@@ -1119,7 +1331,14 @@ Compiled:     Unit that renders the grid to GPU
 
 **Coupling point**: Conditional formatting depends on cell values. Cell values depend on formulas. Formulas depend on other cells. The dependency graph determines evaluation order. This is why the Resolved phase computes the topological sort BEFORE evaluation.
 
-### 9.3 Drawing / vector graphics app
+**What falls out of this modeling**:
+- Incremental evaluation: change cell A1 → only cells dependent on A1 recompute, the dependency DAG is the ASDL structure
+- Compiled formulas: `=SUM(A1:A10)` compiles to a native add chain with baked offsets — no formula interpreter at runtime
+- Circular dependency detection: falls out of the topological sort in the Resolved phase — cycles are errors with semantic refs
+- Parallel evaluation: independent subgraphs of the dependency DAG evaluate in parallel, no scheduler needed
+- Charts as second terminal: same cell data → chart rendering pipeline, memoized independently, change a cell → chart recompiles incrementally
+
+### 11.3 Drawing / vector graphics app
 
 **Sum types**:
 ```
@@ -1141,7 +1360,14 @@ Compiled:   Unit that renders to GPU
 
 **Key insight**: A vector graphics app and a UI toolkit have ALMOST IDENTICAL compilation pipelines. The difference is the source ASDL: a vector app has shapes with artistic properties (gradients, blends, strokes). A UI toolkit has elements with layout properties (flex, stack, sizing). Both compile to the same thing: GPU draw calls.
 
-### 9.4 Game / simulation
+**What falls out of this modeling**:
+- Incremental rendering: move one shape → memoize caches all others → 10,000 shapes behaves like 10 shapes per edit
+- Layer reordering: new list, same child nodes (structural sharing) → memoize hits on every layer's content
+- Group transforms: move group → children are same ASDL nodes → children cached, only group shell recompiles
+- Export to multiple formats: SVG, PDF, PNG are different terminal boundaries from the same ASDL → target is a memoize key
+- Zoom/pan: viewport-independent shape compilation + viewport-dependent projection → zoom is a cache hit on all shapes
+
+### 11.4 Game / simulation
 
 **Sum types**:
 ```
@@ -1166,13 +1392,21 @@ Compiled:     Unit that renders frame + Unit that steps physics
 
 This is a subtlety: not everything can be baked. Per-frame-changing values (physics positions, animation states) must be state fields, not constants. The Phase 4 classification determines: constant (bake it), per-frame (state field), per-vertex (shader attribute). The classification IS the compilation strategy.
 
+**What falls out of this modeling**:
+- Two pipelines from one source: render and physics compile independently — change a mesh, physics cached; change a collider, render cached
+- Incremental scene compilation: add/move one entity → memoize caches all others
+- Material specialization: PBR with baked roughness/metallic compiles to a specialized shader — no runtime material branching
+- Live editing: edit an entity → recompile → hot-swap → see change immediately, no separate editor/play modes
+- Prefab instancing: 100 references to the same ASDL subtree → memoize compiles once, change the prefab → one recompilation updates all instances
+- Parallelism: independent entities compile in parallel, independent render buckets compile in parallel
+
 ---
 
-## 10. The Master Checklist
+## 12. The Master Checklist
 
 Before writing any implementation, answer these questions about your source ASDL:
 
-### 10.1 Domain nouns
+### 12.1 Domain nouns
 ```
 □ Listed every user-visible noun
 □ Classified each as identity noun or property
@@ -1181,7 +1415,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No implementation nouns in the source (no buffers, threads, callbacks)
 ```
 
-### 10.2 Sum types
+### 12.2 Sum types
 ```
 □ Every "or" in the domain is an enum
 □ Every enum has ≥ 2 variants
@@ -1191,7 +1425,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Every user action produces a valid variant
 ```
 
-### 10.3 Containment
+### 12.3 Containment
 ```
 □ Drawn the containment tree
 □ Each parent owns its children (no shared ownership)
@@ -1200,7 +1434,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Recursive types use * or ? (no infinite structs)
 ```
 
-### 10.4 Phases
+### 12.4 Phases
 ```
 □ Named each phase
 □ Named each transition verb (lower, resolve, classify, schedule, compile)
@@ -1211,7 +1445,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No phase should be split without a clear additional decision to resolve
 ```
 
-### 10.5 Coupling points
+### 12.5 Coupling points
 ```
 □ Identified every place where two subtrees need each other's information
 □ Determined which must be resolved in the same phase
@@ -1219,7 +1453,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ These orderings are consistent (no cycles between phases)
 ```
 
-### 10.6 Quality tests
+### 12.6 Quality tests
 ```
 □ Save/load: every user-visible aspect survives round-trip
 □ Undo: reverting to previous ASDL node restores everything
@@ -1227,9 +1461,11 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Minimality: every field independently editable
 □ Orthogonality: independent fields don't constrain each other
 □ Collaboration: edits to different subtrees merge cleanly
+□ Testing: every function testable with one constructor + one assertion
+□ No function needs mocks, fixtures, setup, teardown, or ordering
 ```
 
-### 10.7 Incremental compilation
+### 12.7 Incremental compilation
 ```
 □ ASDL types are marked unique
 □ Edits produce new nodes with structural sharing (not deep copy)
@@ -1238,7 +1474,25 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Unchanged subtrees are identical Lua objects (not copies)
 ```
 
-### 10.8 View / UI
+### 12.8 Parallelism
+```
+□ Independent subtrees can compile in parallel (no shared mutable state)
+□ Memoize boundaries align with parallelism units (one per identity noun)
+□ Granularity is coarse enough to avoid scheduling overhead
+□ No implicit ordering between independent branches
+```
+
+### 12.9 LuaFun enforcement
+```
+□ Every transition function is expressible as a LuaFun chain
+□ Every reducer arm is expressible as a LuaFun chain
+□ No mutable accumulators needed (data is self-contained per node)
+□ No mid-chain lookups needed (references resolved in prior phase)
+□ No imperative control flow needed (sum types handled by Unit.match)
+□ If a function resists LuaFun → fix the ASDL, not the code
+```
+
+### 12.10 View / UI
 ```
 □ View is a separate ASDL, projected from source
 □ View elements carry semantic refs back to source
@@ -1246,9 +1500,19 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Errors flow from domain pipeline to View via semantic refs
 ```
 
+### 12.11 Implementation discovery (leaves-up)
+```
+□ Started at leaf compilers, not at top-level pipeline
+□ Each leaf compiles as a clean LuaFun chain — no reaching, no context args
+□ Missing fields discovered by leaves were added to ASDL and propagated up
+□ Layers above were modified to provide what leaves demanded
+□ ASDL stabilized when leaves stopped demanding changes
+□ Design (top-down) and implementation (bottom-up) interleaved until convergence
+```
+
 ---
 
-## 11. The Deep Insight
+## 13. The Deep Insight
 
 The ASDL is not a data format. It is not a schema. It is not a description of what the program stores.
 
@@ -1268,11 +1532,13 @@ These are the same properties that make a PROGRAMMING LANGUAGE good. Because tha
 
 Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. The Unit is the object code.
 
+And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, the same transitions compile to Terra/LLVM native code, to LuaJIT closures, to JavaScript, or to WASM. Only the leaf compilation — the terminal boundary where ASDL becomes machine instructions — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
+
 Design the language well, and the compiler writes itself. Design it poorly, and no amount of implementation effort can fix it. The ASDL is the architecture. Everything else is derived.
 
 ---
 
-## 12. Summary
+## 14. Summary
 
 ```
 THE MODELING METHOD
@@ -1301,22 +1567,35 @@ THE MODELING METHOD
    Name the verb. If you can't name it, the phase shouldn't exist.
    Terminal phase has zero sum types.
 
-7. TEST THE SOURCE ASDL
-   Save/load, undo, completeness, minimality,
-   orthogonality, collaboration. Fix before implementing.
+ 7. TEST THE SOURCE ASDL
+    Save/load, undo, completeness, minimality,
+    orthogonality, collaboration, testing.
+    Every function testable with one constructor + one assertion.
+    Fix before implementing.
 
 8. DESIGN FOR INCREMENTALITY
    ASDL unique. Structural sharing on edits.
    Memoize boundaries at identity nouns.
 
-9. DESIGN THE VIEW PROJECTION
-   Separate ASDL. Semantic refs back to source.
-   Own phase pipeline to GPU.
+9. VERIFY PARALLELISM
+   Independent subtrees compile in parallel — by construction.
+   Same granularity as incrementality. No separate scheduling.
+   The ASDL graph IS the execution plan.
 
-10. IMPLEMENT
-    Now — and only now — write the transition and terminal functions.
-    The types are right. The phases are right.
-    Implementation is mechanical. The ASDL told you what to build.
+10. DESIGN THE VIEW PROJECTION
+    Separate ASDL. Semantic refs back to source.
+    Own phase pipeline to GPU.
+
+11. IMPLEMENT LEAVES-UP
+    Start at the leaf compiler. Write the function you want to write.
+    The leaf tells you what the ASDL must provide.
+    Fix the layer above. Recurse upward to the source ASDL.
+    Every function is a LuaFun chain. If it resists — fix the ASDL.
+
+12. CONVERGE
+    Steps 1-10 give a top-down draft. Step 11 tests it bottom-up.
+    The ASDL stabilizes when leaves stop demanding changes.
+    Design and implementation interleave until convergence.
 ```
 
-The hard part is steps 1-9. Step 10 is where the pattern's 140 lines of framework, LuaFun, B.match, and B.errors make the rest straightforward. But no amount of good tooling can compensate for wrong types. Design first. Implement second. The ASDL is the architecture.
+The hard part is steps 1-10. Step 11 is where the leaves either confirm the design is right or send you back to fix it. The direction is bottom-up: write the leaf you want to write, discover what it needs, modify each layer above to provide it, recurse to the source ASDL. Steps 1-10 tell you WHERE to look. Step 11 tells you WHAT to put there. When the ASDL is correct, every leaf is a natural LuaFun chain and every phase transition is obvious. When it's not, the leaf resistance is the signal — and it arrives in 10 lines, not 500. The ASDL is the architecture. The leaves are the proof.
