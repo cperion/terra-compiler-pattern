@@ -1,3 +1,4 @@
+return [=[
 -- ============================================================================
 -- Canonical Design System ASDL Surface (Refined)
 -- ----------------------------------------------------------------------------
@@ -5,13 +6,14 @@
 --
 -- Design-system authors edit DesignDecl.
 -- The design-system compiler resolves it into DesignResolved.
--- App/widget lowering USES resolved recipes while constructing UiDecl.
+-- App/widget lowering USES resolved recipes together with explicit child
+-- environments while constructing UiDecl.
 --
 --     DesignDecl
 --         ↓ resolve
---     DesignResolved
+--     DesignResolved + DesignApply.ChildEnv
 --         ↑ apply
---     App.Widget
+--     App.Widget + DesignUse.Instance
 --         ↓ lower
 --       UiDecl
 --
@@ -467,6 +469,7 @@ module DesignDecl {
     --
     -- The design system defines how content SHOULD look, but the app/widget
     -- layer still owns the actual content and tree composition.
+    -- During recipe application this lowers into UiDecl.Content, not paint ops.
     ContentPatch = NoContent()
                  | TextContent(
                        TextStyleExpr style,
@@ -639,6 +642,8 @@ module DesignUse {
     --     - which recipe is used
     --     - which variants/states are active
     --     - what content is bound into recipe slots
+    --
+    --   Child bindings are resolved structurally through DesignApply.ChildEnv.
     -- ------------------------------------------------------------------------
 
     Instance = (
@@ -656,6 +661,7 @@ module DesignUse {
     --
     --   Note:
     --     child/children bindings refer to APP-OWNED semantic children.
+    --     Recipe application resolves them through DesignApply.ChildEnv.
     --     This avoids making DesignUse itself the owner of a recursive UI tree.
     SlotBinding = BindText(
                       DesignCore.SlotRef slot,
@@ -677,6 +683,29 @@ module DesignUse {
 
 
 
+module DesignApply {
+
+    -- ------------------------------------------------------------------------
+    -- Explicit child environment for recipe application.
+    --
+    -- DesignUse.BindChild / BindChildren name app-owned semantic children.
+    -- Recipe application resolves those refs through this environment while
+    -- constructing UiDecl. This keeps recipe use pure and eliminates hidden
+    -- widget registries or ambient child lookups.
+    -- ------------------------------------------------------------------------
+
+    Child = (
+        UiCore.SemanticRef semantic_ref,
+        UiDecl.Element element
+    ) unique
+
+    ChildEnv = (
+        Child* children
+    ) unique
+}
+
+
+
 module DesignResolved {
 
     -- ------------------------------------------------------------------------
@@ -689,7 +718,9 @@ module DesignResolved {
     --   - value-kind validation
     --
     -- The result is concrete DS data that app/widget lowering applies while
-    -- constructing UiDecl.
+    -- constructing UiDecl. Recipe application combines this with DesignUse and
+    -- DesignApply.ChildEnv to produce concrete UiDecl layout/paint/content/
+    -- behavior/accessibility facets.
     --
     -- Important:
     --   This phase resolves VALUES, not recipe application.
@@ -943,6 +974,7 @@ module DesignResolved {
     -- ------------------------------------------------------------------------
     -- Resolved content patch
     -- ------------------------------------------------------------------------
+    -- These lower directly into UiDecl.Content during recipe application.
     ContentPatch = NoContent()
                  | TextContent(
                        TextStyle style,
@@ -1060,3 +1092,5 @@ module DesignResolved {
                      DesignCore.NumberKind kind
                  )
 }
+
+]=]

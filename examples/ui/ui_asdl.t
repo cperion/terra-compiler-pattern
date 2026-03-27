@@ -1,15 +1,18 @@
+return [=[
 -- ============================================================================
 -- Canonical UI Library ASDL Surface (Final Pass)
 -- ----------------------------------------------------------------------------
 -- This is the canonical UI layer directly under app-specific widgets.
--- App-specific widget editors lower into UiDecl.
+-- App-specific widget editors lower concrete UI structure into UiDecl.
+-- Raw UI input, reducer state, and semantic UI outputs live in sibling ASDL
+-- modules so authored UI structure stays free of runtime interaction state.
 --
 -- Final-pass goals:
 --   - keep the source ASDL small and canonical
 --   - one element tree, not multiple unrelated trees
---   - layout / paint / behavior are facets on the same element identity
+--   - layout / paint / content / behavior are facets on the same element identity
 --   - stable ids and semantic refs flow through all UI phases
---   - no runtime objects, callbacks, or solved geometry in source
+--   - no runtime objects, callbacks, style registries, or solved geometry in source
 --   - layout and text shaping resolve together in UiLaid
 --   - paint batching and behavior routing are sibling projections
 -- ============================================================================
@@ -23,17 +26,12 @@ module UiCore {
     ElementId     = (number value) unique
     SemanticRef   = (number domain, number value) unique
 
-    ThemeRef      = (number value) unique
-    StyleRef      = (number value) unique
-
     FontRef       = (number value) unique
     ImageRef      = (number value) unique
     CursorRef     = (number value) unique
 
     CommandRef    = (number value) unique
-    StateRef      = (number value) unique
     TextModelRef  = (number value) unique
-    ValueRef      = (number value) unique
     ScrollRef     = (number value) unique
 
     GlyphAtlasRef = (number value) unique
@@ -112,7 +110,7 @@ module UiCore {
     Overflow = Visible()
              | Hidden()
              | Scroll()
-             | Auto()
+             | OverflowAuto()
 
     Measure = Auto()
             | Px(number value)
@@ -239,8 +237,9 @@ module UiCore {
               | TextEnd()
               | Justify()
 
-    TextValue = Literal(string value)
-              | Bound(ValueRef ref)
+    TextValue = (
+        string value
+    ) unique
 
     TextStyle = (
         FontRef? font,
@@ -378,7 +377,6 @@ module UiDecl {
 
     Document = (
         number version,
-        UiCore.ThemeRef? theme,
         Root* roots,
         Overlay* overlays
     ) unique
@@ -407,9 +405,9 @@ module UiDecl {
         string? debug_name,
         UiCore.Role role,
         Flags flags,
-        UiCore.StyleRef* style_refs,
         Layout layout,
         Paint paint,
+        Content content,
         Behavior behavior,
         Accessibility accessibility,
         Element* children
@@ -452,6 +450,7 @@ module UiDecl {
                   UiCore.Brush fill,
                   UiCore.Brush? stroke,
                   number stroke_width,
+                  UiCore.StrokeAlign align,
                   UiCore.Corners corners
               )
             | Shadow(
@@ -462,15 +461,6 @@ module UiDecl {
                   number dy,
                   UiCore.ShadowKind kind,
                   UiCore.Corners corners
-              )
-            | Text(
-                  UiCore.TextValue value,
-                  UiCore.TextStyle style,
-                  UiCore.TextLayout layout
-              )
-            | Image(
-                  UiCore.ImageRef image,
-                  UiCore.ImageStyle style
               )
             | Clip(
                   UiCore.Corners corners
@@ -485,6 +475,26 @@ module UiDecl {
                   UiCore.BlendMode mode
               )
             | CustomPaint(
+                  number kind,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Content facet
+    -- ------------------------------------------------------------------------
+    -- Content is distinct from decorative paint because layout, shaping,
+    -- accessibility, and editing all depend on it structurally.
+    Content = NoContent()
+            | Text(
+                  UiCore.TextValue value,
+                  UiCore.TextStyle style,
+                  UiCore.TextLayout layout
+              )
+            | Image(
+                  UiCore.ImageRef image,
+                  UiCore.ImageStyle style
+              )
+            | CustomContent(
                   number kind,
                   number payload
               )
@@ -526,7 +536,6 @@ module UiDecl {
                       UiCore.CommandRef command
                   )
                 | Toggle(
-                      UiCore.StateRef state,
                       UiCore.ToggleValue value,
                       UiCore.PointerButton button,
                       UiCore.CommandRef? command
@@ -574,6 +583,81 @@ module UiDecl {
         string? description,
         boolean hidden,
         number sort_priority
+    ) unique
+}
+
+
+
+module UiInput {
+
+    -- ------------------------------------------------------------------------
+    -- Canonical UI input language.
+    -- These are raw UI-facing events before routing.
+    -- ------------------------------------------------------------------------
+
+    Event = PointerMoved(
+                UiCore.Point position
+            )
+          | PointerPressed(
+                UiCore.Point position,
+                UiCore.PointerButton button
+            )
+          | PointerReleased(
+                UiCore.Point position,
+                UiCore.PointerButton button
+            )
+          | PointerExited()
+          | WheelScrolled(
+                UiCore.Point position,
+                number dx,
+                number dy
+            )
+          | KeyChanged(
+                UiCore.KeyEvent when,
+                UiCore.KeyChord chord
+            )
+          | TextEntered(
+                string text
+            )
+          | FocusChanged(
+                boolean focused
+            )
+          | ViewportResized(
+                UiCore.Size viewport
+            )
+}
+
+
+
+module UiSession {
+
+    -- ------------------------------------------------------------------------
+    -- Pure interaction state owned by the UI reducer.
+    -- This is not authored UI structure and not renderer state.
+    -- ------------------------------------------------------------------------
+
+    State = (
+        UiCore.Size viewport,
+        UiCore.Point pointer,
+        boolean pointer_in_bounds,
+        boolean window_focused,
+        PointerPress* pressed,
+        UiCore.ElementId? hovered,
+        UiCore.ElementId? focused,
+        UiCore.ElementId? captured,
+        DragSession? drag
+    ) unique
+
+    PointerPress = (
+        UiCore.PointerButton button,
+        UiCore.ElementId target,
+        number click_count
+    ) unique
+
+    DragSession = (
+        UiCore.ElementId source,
+        UiCore.DragPayload payload,
+        UiCore.Point origin
     ) unique
 }
 
@@ -637,6 +721,7 @@ module UiLaid {
                  UiCore.Brush fill,
                  UiCore.Brush? stroke,
                  number stroke_width,
+                 UiCore.StrokeAlign align,
                  UiCore.Corners corners
              )
            | ShadowDraw(
@@ -731,7 +816,6 @@ module UiLaid {
                       UiCore.CommandRef command
                   )
                 | Toggle(
-                      UiCore.StateRef state,
                       UiCore.ToggleValue value,
                       UiCore.PointerButton button,
                       UiCore.CommandRef? command
@@ -790,51 +874,49 @@ module UiBatched {
     -- ------------------------------------------------------------------------
     -- Paint-domain projection from UiLaid.
     -- Renderer-friendly batch plan, still pure canonical data.
+    --
+    -- Important:
+    --   clip facts are carried structurally on the batch / effect item itself.
+    --   The backend leaf must not need a scene-global clip lookup registry.
     -- ------------------------------------------------------------------------
 
     Scene = (
-        ClipEntry* clips,
         Batch* batches,
         UiCore.Rect bounds
     ) unique
 
-    ClipEntry = (
-        number id,
-        UiCore.ClipShape shape
-    ) unique
-
     Batch = BoxBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 BoxItem* items
             )
           | ShadowBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 ShadowItem* items
             )
           | ImageBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 UiCore.ImageRef image,
                 UiCore.ImageSampling sampling,
                 ImageItem* items
             )
           | GlyphBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 UiCore.FontRef font,
                 UiCore.GlyphAtlasRef atlas,
                 GlyphItem* items
             )
           | EffectBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 EffectItem* items
             )
           | CustomBatch(
                 number sort_key,
-                number? clip_id,
+                UiCore.ClipShape? clip,
                 number kind,
                 number payload
             )
@@ -844,6 +926,7 @@ module UiBatched {
         UiCore.Brush fill,
         UiCore.Brush? stroke,
         number stroke_width,
+        UiCore.StrokeAlign align,
         UiCore.Corners corners
     ) unique
 
@@ -875,7 +958,7 @@ module UiBatched {
                | PopTransform()
                | PushBlend(UiCore.BlendMode mode)
                | PopBlend()
-               | PushClip(number clip_id)
+               | PushClip(UiCore.ClipShape shape)
                | PopClip()
 }
 
@@ -915,25 +998,28 @@ module UiRouted {
 
     PointerRoute = HoverRoute(
                        UiCore.ElementId element,
+                       UiCore.SemanticRef? semantic_ref,
                        UiCore.CursorRef? cursor,
                        UiCore.CommandRef? enter,
                        UiCore.CommandRef? leave
                    )
                  | PressRoute(
                        UiCore.ElementId element,
+                       UiCore.SemanticRef? semantic_ref,
                        UiCore.PointerButton button,
                        number click_count,
                        UiCore.CommandRef command
                    )
                  | ToggleRoute(
                        UiCore.ElementId element,
-                       UiCore.StateRef state,
+                       UiCore.SemanticRef? semantic_ref,
                        UiCore.ToggleValue value,
                        UiCore.PointerButton button,
                        UiCore.CommandRef? command
                    )
                  | GestureRoute(
                        UiCore.ElementId element,
+                       UiCore.SemanticRef? semantic_ref,
                        UiCore.Gesture gesture,
                        UiCore.CommandRef command
                    )
@@ -977,3 +1063,67 @@ module UiRouted {
         AccessibilityNode* children
     ) unique
 }
+
+
+
+module UiIntent {
+
+    -- ------------------------------------------------------------------------
+    -- Semantic UI outputs.
+    -- The UI reducer emits these after routing UiInput through UiRouted.
+    -- App reducers can translate them into app-domain events.
+    -- ------------------------------------------------------------------------
+
+    CaretMotion = MoveLeft()
+                | MoveRight()
+                | MoveUp()
+                | MoveDown()
+                | MoveLineStart()
+                | MoveLineEnd()
+                | MoveWordLeft()
+                | MoveWordRight()
+
+    EditAction = InsertText(string text)
+               | Backspace()
+               | Delete()
+               | MoveCaret(CaretMotion motion, boolean extend)
+               | SelectAll()
+               | Submit()
+
+    Event = Command(
+                UiCore.CommandRef command,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Toggle(
+                UiCore.CommandRef? command,
+                UiCore.ToggleValue value,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Scroll(
+                UiCore.ScrollRef? model,
+                number dx,
+                number dy,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Edit(
+                UiCore.TextModelRef model,
+                EditAction action,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CommandRef? changed
+            )
+          | Focus(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Hover(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CursorRef? cursor
+            )
+}
+
+]=]
