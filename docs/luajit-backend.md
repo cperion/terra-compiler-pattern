@@ -12,7 +12,7 @@ The deeper point is stronger: the so-called Terra Compiler Pattern is not fundam
 
 Terra is one backend that realizes these Units explicitly through quotes and LLVM. LuaJIT is another backend that realizes them through closures, FFI state, and trace compilation. In a JIT-native runtime, much of the backend compiler is already available; our job is to emit terminal code that is ultra-monomorphic and specialization-friendly.
 
-Terra is the primary backend, but LuaJIT is now implemented as a real alternate backend in this repository.
+LuaJIT is now a real backend in its own right in this repository, and should usually be the default backend on JIT-native platforms. Terra remains the opt-in strong backend when explicit staging, static native layout, ABI control, or LLVM-native optimization are worth the extra cost.
 
 ## Files
 
@@ -84,7 +84,7 @@ LuaJIT uses:
 - explicit native ABI
 - Terra struct synthesis in `Unit.compose`
 - LLVM optimization and vectorization
-- best peak leaf performance
+- stronger design pressure through explicit types and staging
 - strongest backend when you need predictable native code generation rather than host-JIT specialization
 
 ## Running the backend examples

@@ -19,6 +19,11 @@ This gives practical intelligence on the tradeoff:
 - Terra usually pays more to compile
 - LuaJIT usually pays more to execute
 
+Current repository-level conclusion:
+
+- **LuaJIT should usually be the default backend** on JIT-native platforms because compile/build cost is dramatically cheaper
+- **Terra remains the opt-in strong backend** where explicit staging, exact native layout, ABI control, or stronger LLVM-native optimization justify the extra compile tax
+
 ## Files
 
 - `bench/backend_bench_common.lua`
@@ -127,3 +132,5 @@ So the benchmark should be used as an architectural instrument:
 - where is the crossover for your workload?
 
 That is the useful intelligence.
+
+In other words, the benchmark is most useful for deciding where the architecture should stay on LuaJIT by default and where a terminal family should deliberately opt into Terra.

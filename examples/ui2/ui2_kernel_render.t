@@ -17,12 +17,12 @@ local function ptr_t(t)
 end
 
 -- ============================================================================
--- UiKernel.Render:compile / UiKernel.Payload:materialize
+-- UiKernel.Spec:compile / UiKernel.Payload:materialize
 -- ----------------------------------------------------------------------------
 -- This file implements the final two ui2 boundaries.
 --
 -- Boundary meanings:
---   UiKernel.Render:compile(target, assets) -> Unit
+--   UiKernel.Spec:compile(target) -> Unit
 --   UiKernel.Payload:materialize(target, assets, state) -> keep
 --
 -- Why compile/materialize are split:
@@ -35,11 +35,10 @@ end
 -- What compile consumes:
 --   - UiKernel.Spec
 --   - explicit render target contract
---   - explicit asset catalog needed by runtime payload materialization
 --
 -- What compile produces:
 --   - one Unit with a stable scene runner and one state_t layout
---   - init/release hooks that delegate payload loading to materialize
+--   - generic init/release hooks for emptying scene state
 --
 -- What materialize consumes:
 --   - UiKernel.Payload
@@ -102,9 +101,24 @@ local function stateful_unit(fn, state_t, init, release)
     return unit
 end
 
+local function clear_scene_state(state)
+    state.batch_count = 0
+    state.batches = nil
+    state.box_count = 0
+    state.boxes = nil
+    state.shadow_count = 0
+    state.shadows = nil
+    state.text_run_count = 0
+    state.text_runs = nil
+    state.image_count = 0
+    state.images = nil
+    state.custom_count = 0
+    state.customs = nil
+end
+
 local function normalize_target(target)
     if not target then
-        error("UiKernel.Render:compile: target is required", 3)
+        error("UiKernel.Spec:compile: target is required", 3)
     end
 
     if type(target.runtime_t) == "function" and type(target.headers) == "function" then
@@ -115,11 +129,11 @@ local function normalize_target(target)
     end
 
     if type(target) ~= "table" or type(target.backend) ~= "table" then
-        error("UiKernel.Render:compile: target must be a backend module or { backend = ..., custom = ... }", 3)
+        error("UiKernel.Spec:compile: target must be a backend module or { backend = ..., custom = ... }", 3)
     end
 
     if type(target.backend.runtime_t) ~= "function" or type(target.backend.headers) ~= "function" then
-        error("UiKernel.Render:compile: target.backend must provide runtime_t() and headers()", 3)
+        error("UiKernel.Spec:compile: target.backend must provide runtime_t() and headers()", 3)
     end
 
     return {
@@ -279,7 +293,7 @@ local function custom_handlers_for(target, spec)
     return F.iter(spec.custom_families):map(function(family)
         local fn = target_custom[family.family]
         if fn == nil then
-            error(("UiKernel.Render:compile: missing target custom handler for family %s")
+            error(("UiKernel.Spec:compile: missing target custom handler for family %s")
                 :format(tostring(family.family)), 3)
         end
         return {
@@ -835,25 +849,18 @@ return function(T)
 
     -- ---------------------------------------------------------------------
     -- Public boundary:
-    --   UiKernel.Render:compile(target, assets) -> Unit
+    --   UiKernel.Spec:compile(target) -> Unit
     -- ---------------------------------------------------------------------
-    -- compile builds the stable runner from Spec and closes over the current
-    -- Payload for init/release. That is the explicit bake/live split in code.
-    T.UiKernel.Render.compile = U.terminal(function(render, target, assets)
+    -- compile now depends only on baked machine facts. Live scene payload is
+    -- loaded explicitly later through UiKernel.Payload:materialize.
+    T.UiKernel.Spec.compile = U.terminal(function(spec, target)
         target = normalize_target(target)
-        local runner = build_scene_runner(target, render.spec)
-        local keep = nil
+        local runner = build_scene_runner(target, spec)
 
         return stateful_unit(runner, SceneState, function(state)
-            keep = render.payload:materialize(target, assets, state)
+            clear_scene_state(state)
         end, function(state)
-            state.batches = nil
-            state.boxes = nil
-            state.shadows = nil
-            state.text_runs = nil
-            state.images = nil
-            state.customs = nil
-            keep = nil
+            clear_scene_state(state)
         end)
     end)
 end

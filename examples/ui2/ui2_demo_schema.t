@@ -35,7 +35,7 @@ return U.spec {
             ["UiDemand.Scene"] = "solve",
             ["UiSolved.Scene"] = "plan",
             ["UiPlan.Scene"] = "specialize_kernel",
-            ["UiKernel.Render"] = "compile",
+            ["UiKernel.Spec"] = "compile",
             ["UiKernel.Payload"] = "materialize",
         })
 

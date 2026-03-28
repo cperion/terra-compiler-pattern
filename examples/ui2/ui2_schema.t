@@ -22,7 +22,9 @@ return U.spec {
     --     -> plan
     --   UiPlan
     --     -> specialize_kernel
-    --   UiKernel
+    --   UiKernel.Render
+    --     -> split
+    --   UiKernel.Spec
     --     -> compile
     --   Unit
     --
@@ -75,7 +77,7 @@ return U.spec {
         --   UiDemand.Scene:solve()              -> UiSolved.Scene
         --   UiSolved.Scene:plan()               -> UiPlan.Scene
         --   UiPlan.Scene:specialize_kernel()           -> UiKernel.Render
-        --   UiKernel.Render:compile(target, assets)     -> Unit
+        --   UiKernel.Spec:compile(target)              -> Unit
         --
         -- Runtime-side materialization helper:
         --   UiKernel.Payload:materialize(target, assets, state)
@@ -91,8 +93,8 @@ return U.spec {
         --   UiApply.Result  explicit coupling of next state + intents
         --
         -- Note that compile/materialize are intentionally split:
-        --   compile(target, assets) answers "what machine code + ABI do we install?"
-        --   materialize(target, assets, state) answers "what live payload do we load into it?"
+        --   spec:compile(target) answers "what machine code + ABI do we install?"
+        --   payload:materialize(target, assets, state) answers "what live payload do we load into it?"
         --
         -- This split is the core result of the leaf-first design work.
         U.install_stubs(T, {
@@ -103,7 +105,7 @@ return U.spec {
             ["UiDemand.Scene"] = "solve",
             ["UiSolved.Scene"] = "plan",
             ["UiPlan.Scene"] = "specialize_kernel",
-            ["UiKernel.Render"] = "compile",
+            ["UiKernel.Spec"] = "compile",
             ["UiKernel.Payload"] = "materialize",
         })
 
@@ -134,7 +136,7 @@ return U.spec {
         --   bound:flatten(viewport)
         --   flat:prepare_demands(assets)
         --   demand:solve(assets)
-        --   render:compile(target, assets)
+        --   spec:compile(target)
         --   payload:materialize(target, assets, state)
         --
         -- The exact auxiliary argument list can still evolve during
@@ -192,7 +194,7 @@ return U.spec {
         --   4. UiDemand.Scene:solve
         --   5. UiSolved.Scene:plan
         --   6. UiPlan.Scene:specialize_kernel
-        --   7. UiKernel.Render:compile
+        --   7. UiKernel.Spec:compile
         --   8. UiKernel.Payload:materialize
         --
         -- This order follows the current design discovery exactly and keeps the

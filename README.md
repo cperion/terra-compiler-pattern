@@ -9,7 +9,12 @@ This repository models interactive software as a compiler:
 - terminals compile phase-local ASDL into `Unit`
 - execution runs compiled artifacts until the source changes again
 
-The key discovery in this repository is that the pattern is **not actually Terra-specific**. Terra is one backend — a very strong one — for realizing specialized `Unit`s through LLVM. But the architecture itself is backend-agnostic. In a JIT-native runtime like LuaJIT, much of the backend compiler is already present; the main task is to produce terminal code that is ultra-monomorphic and specialization-friendly.
+The key discovery in this repository is that the pattern is **not actually Terra-specific**. Terra is one backend — a very strong one — for realizing specialized `Unit`s through LLVM. But the architecture itself is backend-neutral. In a JIT-native runtime like LuaJIT, much of the backend compiler is already present; the main task is to produce terminal code that is ultra-monomorphic and specialization-friendly.
+
+Current backend policy:
+
+- **LuaJIT by default** on JIT-native platforms
+- **Terra by opt-in** when explicit staging, static native layout, ABI control, or LLVM-native optimization are worth the extra compile/build cost
 
 The detailed design docs remain the source of truth:
 
@@ -52,7 +57,7 @@ Backend-independent schema/reflection helpers used by inspection and scaffolding
 
 - `unit.t`
 
-Owns Terra-specific behavior:
+Owns Terra-specific behavior as the opt-in explicit-native backend:
 
 - Terra `Unit` construction
 - ABI validation

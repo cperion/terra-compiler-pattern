@@ -2,7 +2,7 @@
 
 ## The hard part is not the pattern. The hard part is the ASDL.
 
-The Terra Compiler Pattern gives you six primitives: ASDL unique, Event ASDL, Apply, terralib.memoize, LuaFun, and Unit. The implementation is small, and the real `unit.t` includes `Unit.inspect(...)` so progress, docs, scaffolds, prompts, and tests are derived directly from the ASDL and installed methods. They produce incremental multi-stage compilers with hot-swap, state management, error handling, and zero-alloc execution — all as emergent properties of composition.
+Historically, this repository called the architecture the Terra Compiler Pattern. But the modeling method described here is backend-neutral. The six architectural primitives are still the same in spirit: ASDL `unique`, Event ASDL, Apply, memoized stage boundaries, LuaFun-style pure transforms, and Unit. The implementation is small, and the real `unit.t` includes `Unit.inspect(...)` so progress, docs, scaffolds, prompts, and tests are derived directly from the ASDL and installed methods. They produce incremental multi-stage compilers with hot-swap, state management, error handling, and zero-alloc execution — all as emergent properties of composition.
 
 But the primitives are tools. They don't tell you WHAT to compile. They don't tell you what your types should be. They don't tell you what phases to define. They don't tell you where knowledge is consumed. They don't tell you which sum types to create or when to eliminate them.
 
@@ -22,7 +22,7 @@ Between intent and execution, there is a GAP. The user thinks in domain concepts
 
 Traditional programs bridge the gap at runtime, every frame, with dispatch tables, virtual calls, config lookups, and state machines. They are INTERPRETERS — they re-answer "what should I do?" every cycle.
 
-The compiler pattern bridges the gap at edit time, once, by COMPILING the user's intent into native code. The compiled code runs until the intent changes. When it changes, the compiler runs again (incrementally — only the changed subtree).
+The compiler pattern bridges the gap at edit time, once, by COMPILING the user's intent into a specialized executable machine. On Terra that may be explicit native code. On LuaJIT it may be a highly specialized closure and state layout that the host JIT compiles aggressively. The compiled result runs until the intent changes. When it changes, the compiler runs again (incrementally — only the changed subtree).
 
 ### 1.2 The gap has layers
 
@@ -37,7 +37,7 @@ Semantic model:   Graph → Node(biquad_kind, params=[2000, 0.7])
     ↓
 Execution plan:   Job(biquad, bus=3, coeffs=[b0, b1, b2, a1, a2])
     ↓
-Machine code:     terra fn: y = 0.067*x + 0.135*x1 + 0.067*x2 - ...
+Machine code:     Terra fn / LuaJIT-specialized loop: y = 0.067*x + 0.135*x1 + 0.067*x2 - ...
 ```
 
 Each layer consumes knowledge — it resolves a decision that the layer above left open. The UI layer knows the user said "Biquad." The semantic layer resolves what that means in the graph. The execution plan computes the coefficients. The machine code bakes them as constants.
@@ -541,7 +541,7 @@ Scheduled phase:
 
 Each phase should have fewer sum types than the previous phase. This is the NARROWING property. If a phase adds sum types, something is wrong — you're creating decisions instead of consuming them.
 
-The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just struct fields with known types at known offsets. This is what lets LLVM produce optimal code — there's nothing to dispatch on.
+The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just concrete fields and predictable access paths. This is what lets the backend optimize aggressively — whether that is LLVM on Terra or host-JIT specialization on LuaJIT — because there is nothing semantic left to dispatch on.
 
 ```
 Phase          Sum types          What they represent
@@ -939,7 +939,7 @@ The memoize key is the function's argument list. For it to work correctly:
 GOOD KEYS:
     ASDL unique nodes          → identity comparison, instant
     numbers, strings, booleans → value comparison, instant
-    Terra types                → identity comparison, instant
+    backend-native types       → identity comparison, instant
 
 BAD KEYS:
     Lua tables                 → identity comparison, but tables are mutable!
@@ -1709,7 +1709,7 @@ These are the same properties that make a PROGRAMMING LANGUAGE good. Because tha
 
 Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. The Unit is the object code.
 
-And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, the same transitions compile to Terra/LLVM native code, to LuaJIT closures, to JavaScript, or to WASM. Only the leaf compilation — the terminal boundary where ASDL becomes machine instructions — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
+And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, and the same transitions can realize Terra/LLVM native code, LuaJIT-specialized closures, JavaScript, or WASM. Only the leaf compilation — the terminal boundary where ASDL becomes executable machinery — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
 
 Design the language well, and the compiler writes itself. Design it poorly, and no amount of implementation effort can fix it. The ASDL is the architecture. Everything else is derived.
 

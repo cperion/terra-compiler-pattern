@@ -1,3 +1,4 @@
+local U = require("unit")
 local Backend = require("examples.ui.backend_sdl_gl")
 local RawText = require("examples.ui.backend_text_sdl_ttf")
 local Schema = require("examples.ui2.ui2_schema")
@@ -301,17 +302,27 @@ local function build_document()
     )
 end
 
-local function compile_ui(viewport, assets)
-    local document = build_document()
-    local bound = document:bind(assets)
+local function ensure_unit_state(unit)
+    if unit.state_t == U.EMPTY then return nil end
+    if unit.__state == nil then
+        unit.__state = terralib.new(unit.state_t)
+        if unit.init then unit.init(unit.__state) end
+    end
+    return unit.__state
+end
+
+local function lower_ui(bound, viewport, assets)
     local flat = bound:flatten(viewport)
     local demand = flat:prepare_demands(assets)
     local solved = demand:solve(assets)
     local plan = solved:plan()
     local render = plan:specialize_kernel()
-    local unit = render:compile(D.target, assets)
+    local unit = render.spec:compile(D.target)
+    local state = ensure_unit_state(unit)
+    if state ~= nil then
+        unit.__payload_keep = render.payload:materialize(D.target, assets, state)
+    end
     return {
-        document = document,
         plan = plan,
         render = render,
         unit = unit,
@@ -333,9 +344,12 @@ local assets = T.UiAsset.Catalog(
     }
 )
 
+local document = build_document()
+local bound = document:bind(assets)
 local session = T.UiSession.State.initial(T.UiCore.Size(runtime.state.width, runtime.state.height))
 local demo_state = D.initial_state()
-local compiled = compile_ui(session.viewport, assets)
+local compiled = lower_ui(bound, session.viewport, assets)
+local relower = false
 local dirty = true
 
 local running = true
@@ -365,15 +379,18 @@ while running do
             end
 
             if session.viewport ~= prev_viewport then
-                compiled = compile_ui(session.viewport, assets)
-                print(("ui2 demo: viewport %dx%d")
-                    :format(session.viewport.w, session.viewport.h))
+                relower = true
             end
         end
         event = Backend.poll_native_event(runtime)
     end
 
-    if dirty then
+    if relower then
+        compiled = lower_ui(bound, session.viewport, assets)
+        relower = false
+    end
+
+    if dirty or relower then
         Backend.render_unit(runtime, compiled.unit)
         dirty = false
     else
