@@ -1,7 +1,6 @@
 local U = require("unit")
 local F = require("fun")
 
-local Apply = {}
 local unpack_fn = table.unpack or unpack
 
 local function L(xs)
@@ -288,7 +287,7 @@ local function apply_window_focus(T, state, focused)
     )
 end
 
-function Apply.install(T)
+return function(T)
     T.UiSession.State.apply = U.transition(function(state, routed, input)
         return U.match(input, {
             PointerMoved = function(v)
@@ -321,5 +320,3 @@ function Apply.install(T)
         })
     end)
 end
-
-return Apply

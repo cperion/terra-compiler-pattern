@@ -2,7 +2,6 @@ local U = require("unit")
 local F = require("fun")
 local Text = require("examples.ui.ui_text_resolve")
 
-local Layout = {}
 local unpack_fn = table.unpack or unpack
 
 local function L(xs)
@@ -451,7 +450,7 @@ function layout_element(T, assets, element, origin_x, origin_y, available_size, 
     }
 end
 
-function Layout.install(T)
+return function(T)
     T.UiDecl.Document.layout = U.transition(function(document, assets, viewport)
         viewport = viewport or T.UiCore.Size(1280, 720)
         local root_bounds = size(T, viewport.w, viewport.h)
@@ -477,5 +476,3 @@ function Layout.install(T)
         return T.UiLaid.Scene(roots, overlays, viewport)
     end)
 end
-
-return Layout

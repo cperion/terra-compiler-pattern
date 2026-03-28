@@ -1452,6 +1452,144 @@ They're the same thing. There is no distinction to make.
 The architecture IS the composition.
 ```
 
+### 9.5 The pattern is functional programming with staging
+
+Strip away the project-specific names — ASDL, boundary, phase, Unit,
+transition, terminal — and the remaining shape is simple:
+
+```
+Typed pure functions composed with memoization,
+where the last function emits an installed machine
+instead of another data value.
+```
+
+A traditional functional pipeline looks like:
+
+```lua
+f: A -> B
+g: B -> C
+h: C -> D
+
+h(g(f(x)))
+```
+
+This pattern is the same shape:
+
+```lua
+lower:    A.Track -> B.Track         -- transition
+schedule: B.Track -> C.Job*          -- transition
+compile:  C.Job   -> Unit            -- terminal
+
+compile(schedule(lower(x)))
+```
+
+The only real difference is the codomain of the last function. Instead
+of returning another plain value, it returns a closed executable artifact:
+
+```lua
+Unit { fn, state_t }
+```
+
+That is why the pattern feels exotic at first and obvious later. It is
+ordinary typed FP plus staging:
+
+- algebraic data types          → ASDL records + sums
+- pattern matching              → `Unit.match`
+- functional update             → `Unit.with`
+- map / filter / fold           → LuaFun
+- errors as values              → `Unit.errors`
+- pure function memoization     → `terralib.memoize`
+- staged terminal compilation   → Terra quotes + `Unit.new`
+
+The pipeline is just function composition. The phases are just type
+families. The ordering constraint is just the type signature: you cannot
+call `schedule` before `lower` because `schedule` consumes `B.Track`, not
+`A.Track`.
+
+### 9.6 Designing ASDL is designing the pure functions
+
+In this pattern, ASDL design is not a preliminary paperwork step. It is
+the same discipline functional programmers use when they say:
+
+> Design the types well and the functions become mechanical.
+
+The source ASDL is the domain model, but it is also the set of input and
+output types for the pure layer. Good ASDL design therefore means:
+
+- every real domain “or” becomes a sum type
+- every stable editable thing gets explicit identity
+- every independent authored choice gets a field
+- derived facts move to later phases
+- runtime state moves to `Unit.state_t`
+- cross-references stay as IDs until a resolving phase consumes them
+
+When the ASDL is wrong, the functions get ugly:
+
+- pattern matches feel incomplete
+- transforms need mutable accumulators
+- sibling lookups spread everywhere
+- reducers need hidden context
+- leaves are missing obvious fields
+
+That is not “just implementation difficulty.” It is type design feedback.
+Fixing the ASDL is fixing the function signatures. Once the types are
+right, most transitions collapse into local structural rewrites expressible
+with `match`, `with`, `map`, `filter`, and `reduce`.
+
+This is also why leaves are the best design probe. The leaf tells you what
+its input type must contain. Working upward from the leaf is just the
+staged version of the FP rule:
+
+> let the desired function shape tell you what the types must be.
+
+### 9.7 `unique` and LuaFun make the FP story practical
+
+Two implementation choices make this functional style operationally cheap
+in Lua/Terra.
+
+First, ASDL `unique` gives canonical immutable construction:
+
+```lua
+local a = T.Node(1, "sine", {440})
+local b = T.Node(1, "sine", {440})
+assert(a == b)
+```
+
+Same fields produce the same object, so pointer identity is structural
+identity. That makes `terralib.memoize` a valid incremental cache on the
+actual domain values, not on ad hoc hashes or custom invalidation logic.
+
+Second, LuaFun gives the pure layer a real FP vocabulary without making it
+slow. The implementation discipline is:
+
+```lua
+fun.iter(xs):filter(p):map(f):reduce(g, z)
+```
+
+not:
+
+```lua
+for i = 1, #xs do
+    -- mutable accumulation, incidental control flow,
+    -- ad hoc tables, hidden structural copying
+end
+```
+
+That matters semantically — it keeps the code in the shape the ASDL wants
+— but it also matters operationally. LuaFun's iterator style is friendly
+to LuaJIT tracing, so the pure layer keeps the clarity of FP without
+forcing an interpreter-shaped performance model. LuaJIT optimizes the pure
+layer; LLVM optimizes the emitted execution layer. The pattern gets two
+levels of optimization because the architecture is already split into pure
+transforms and staged output.
+
+This is why learning from functional programming helps directly here. FP
+already has deep literature on algebraic data design, total functions,
+structural recursion, validation, and composition. The Terra Compiler
+Pattern is not separate from that tradition. It is that tradition carried
+through to the point where the terminal function returns an executable
+machine.
+
 ---
 
 ## 10. The Development Flow

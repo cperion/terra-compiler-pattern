@@ -10,8 +10,6 @@ local Schema = require("examples.tasks.tasks_schema")
 local T = Schema.ctx
 local C = Backend.headers()
 local PROFILE = os.getenv("TERRA_TASKS_PROFILE") == "1"
-local TRACE_INPUT = os.getenv("TERRA_TASKS_TRACE_INPUT") == "1"
-local runtime
 
 local SDL_KMOD_CTRL = 0x0040 + 0x0080
 local SDL_KMOD_ALT = 0x0100 + 0x0200
@@ -238,36 +236,6 @@ local function maybe_print_profile(force)
     ))
 end
 
-local function trace_input(fmt, ...)
-    if not TRACE_INPUT then return end
-    print(("[tasks trace] " .. fmt):format(...))
-end
-
-local function trace_native(native)
-    if not TRACE_INPUT then return end
-    local parts = { "native=" .. tostring(native.kind) }
-    if native.x ~= nil and native.y ~= nil then
-        parts[#parts + 1] = ("pos=%s,%s"):format(tostring(native.x), tostring(native.y))
-    end
-    if native.w ~= nil and native.h ~= nil then
-        parts[#parts + 1] = ("size=%s,%s"):format(tostring(native.w), tostring(native.h))
-    end
-    if native.button ~= nil then
-        parts[#parts + 1] = "button=" .. tostring(native.button)
-    end
-    local SDL = Backend.FFI
-    parts[#parts + 1] = "kbd_focus=" .. tostring(SDL.SDL_GetKeyboardFocus() == runtime.window)
-    parts[#parts + 1] = "mouse_focus=" .. tostring(SDL.SDL_GetMouseFocus() == runtime.window)
-    print("[tasks raw] " .. table.concat(parts, " "))
-end
-
-local function intent_kinds(intents)
-    local kinds = {}
-    for _, intent in ipairs(intents or {}) do
-        kinds[#kinds + 1] = intent.kind
-    end
-    return #kinds == 0 and "-" or table.concat(kinds, ",")
-end
 
 local function compile_state(runtime, state, assets)
     Backend.sync_window_size(runtime)
@@ -311,45 +279,27 @@ local function compile_state(runtime, state, assets)
 end
 
 local function settle_startup_window(runtime)
-    local deadline = now_ns() + 250000000 -- ~250ms
-    local saw_exposed = false
-    local saw_focus = false
+    local deadline = now_ns() + 250000000
 
     while now_ns() < deadline do
         Backend.present_clear(runtime)
-
-        local saw_event = false
         for _ = 1, 128 do
             local native = Backend.poll_native_event(runtime)
             if native == nil then break end
-            saw_event = true
-            trace_native(native)
             if native.kind == "Quit" then
                 return false
             elseif native.kind == "WindowResized" then
                 Backend.sync_window_size(runtime)
-            elseif native.kind == "WindowExposed" or native.kind == "WindowShown" then
-                saw_exposed = true
-            elseif native.kind == "FocusChanged" and native.focused then
-                saw_focus = true
             end
         end
-
-        if saw_exposed and saw_focus and not saw_event then
-            return true
-        end
-
         Backend.FFI.SDL_Delay(8)
     end
 
     return true
 end
 
-runtime = Backend.init_window("terra tasks demo", 1100, 760)
+local runtime = Backend.init_window("terra tasks demo", 1100, 760)
 RawText.init(runtime)
-
--- Show/sync before the first compile so layout/routing see the compositor's
--- real initial viewport instead of the hidden-window placeholder size.
 Backend.sync_window_size(runtime)
 if not settle_startup_window(runtime) then
     RawText.shutdown(runtime)
@@ -422,7 +372,6 @@ local ui_session = T.UiSession.State(
 
 local routed, unit, _, prev_trees = compile_state(runtime, state, assets)
 Backend.render_unit(runtime, unit)
-Backend.activate_window(runtime)
 
 while state.running do
     local compile_dirty = false
@@ -433,7 +382,6 @@ while state.running do
         local native = Backend.poll_native_event(runtime)
         if native == nil then break end
         processed_events = processed_events + 1
-        trace_native(native)
         if native.kind == "Quit" then
             state = state:apply(T.TaskEvent.Quit())
             compile_dirty = true
@@ -448,7 +396,6 @@ while state.running do
                 local next_ui_session = ui_apply.session
                 local next_state = Bridge.apply_ui(state, ui_apply)
                 local t2 = PROFILE and now_ns() or nil
-                local session_changed = (next_ui_session ~= ui_session)
                 local state_changed = (next_state ~= state)
                 local layout_changed = (native.kind == "WindowResized")
 
@@ -463,16 +410,6 @@ while state.running do
                     compile_dirty = true
                     first_compile_event_ns = first_compile_event_ns or native.timestamp_ns or t0 or now_ns()
                 end
-
-                trace_input(
-                    "native=%s intents=%s session_changed=%s state_changed=%s layout_changed=%s compile_dirty=%s",
-                    native.kind,
-                    intent_kinds(ui_apply.intents),
-                    tostring(session_changed),
-                    tostring(state_changed),
-                    tostring(layout_changed),
-                    tostring(compile_dirty)
-                )
 
                 ui_session = next_ui_session
                 state = next_state

@@ -1634,15 +1634,7 @@ UiBackend.compile_scene = U.terminal(function(scene, assets)
     end)
 end)
 
-function UiBackend.decode_sdl_event(runtime, raw_event)
-    error("TODO: SDL_Event -> UiInput.Event", 2)
-end
-
-function UiBackend.route_input(ui_session, ui_routed, ui_input)
-    return ui_session:apply(ui_routed, ui_input)
-end
-
-function UiBackend.install(T)
+return function(T)
     T.UiBatched.BoxBatch.compile = UiBackend.compile_box_batch
     T.UiBatched.ShadowBatch.compile = UiBackend.compile_shadow_batch
     T.UiBatched.ImageBatch.compile = UiBackend.compile_image_batch
@@ -1652,8 +1644,3 @@ function UiBackend.install(T)
     T.UiBatched.CustomBatch.compile = UiBackend.compile_batch
     T.UiBatched.Scene.compile = UiBackend.compile_scene
 end
-
-UiBackend.Runtime = Runtime
-UiBackend.C = C
-
-return UiBackend

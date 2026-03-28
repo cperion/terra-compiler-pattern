@@ -1,7 +1,6 @@
 local U = require("unit")
 local F = require("fun")
 
-local Routing = {}
 local unpack_fn = table.unpack or unpack
 
 local function L(xs)
@@ -208,7 +207,7 @@ local function element_routes(T, element, depth)
     }
 end
 
-function Routing.install(T)
+return function(T)
     T.UiLaid.Scene.route = U.transition(function(scene)
         local route_sets = chain_lists {
             L(F.iter(scene.roots):map(function(root)
@@ -232,5 +231,3 @@ function Routing.install(T)
         )
     end)
 end
-
-return Routing

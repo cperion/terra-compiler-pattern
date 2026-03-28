@@ -158,10 +158,6 @@ if not rawget(_G, "__terra_ui_sdl_gl_ffi_cdef") then
         bool SDL_GL_MakeCurrent(SDL_Window *window, SDL_GLContext context);
         bool SDL_GL_SetSwapInterval(int interval);
         bool SDL_GL_SwapWindow(SDL_Window *window);
-        bool SDL_ShowWindow(SDL_Window *window);
-        bool SDL_RaiseWindow(SDL_Window *window);
-        bool SDL_SyncWindow(SDL_Window *window);
-        bool SDL_SetWindowFocusable(SDL_Window *window, bool focusable);
         bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
         bool SDL_GetWindowSizeInPixels(SDL_Window *window, int *w, int *h);
         bool SDL_StartTextInput(SDL_Window *window);
@@ -169,8 +165,6 @@ if not rawget(_G, "__terra_ui_sdl_gl_ffi_cdef") then
         bool SDL_PollEvent(SDL_Event *event);
         uint64_t SDL_GetTicksNS(void);
         void SDL_Delay(uint32_t ms);
-        SDL_Window *SDL_GetKeyboardFocus(void);
-        SDL_Window *SDL_GetMouseFocus(void);
     ]]
     _G.__terra_ui_sdl_gl_ffi_cdef = true
 end
@@ -181,10 +175,7 @@ Backend.texture_cache = {}
 
 Backend.SDL_INIT_VIDEO = 0x00000020
 Backend.SDL_WINDOW_OPENGL = 0x0000000000000002
-Backend.SDL_WINDOW_HIDDEN = 0x0000000000000008
 Backend.SDL_WINDOW_RESIZABLE = 0x0000000000000020
-Backend.SDL_WINDOW_INPUT_FOCUS = 0x0000000000000200
-Backend.SDL_WINDOW_MOUSE_FOCUS = 0x0000000000000400
 Backend.SDL_WINDOW_HIGH_PIXEL_DENSITY = 0x0000000000002000
 Backend.SDL_GL_CONTEXT_PROFILE_COMPATIBILITY = 0x0002
 
@@ -281,10 +272,6 @@ function Backend.init_window(title, width, height)
     sdl_ok(SDL.SDL_GL_SetAttribute(C.SDL_GL_CONTEXT_MINOR_VERSION, 1), "SDL_GL_SetAttribute(MINOR)")
     sdl_ok(SDL.SDL_GL_SetAttribute(C.SDL_GL_CONTEXT_PROFILE_MASK, Backend.SDL_GL_CONTEXT_PROFILE_COMPATIBILITY), "SDL_GL_SetAttribute(PROFILE)")
 
-    -- Create the window with only creation-time flags.
-    -- INPUT_FOCUS / MOUSE_FOCUS are runtime state flags, not authored create
-    -- intent, and starting hidden has proven to produce compositor-specific
-    -- startup/input glitches in the demos.
     local flags = Backend.SDL_WINDOW_OPENGL
         + Backend.SDL_WINDOW_RESIZABLE
         + Backend.SDL_WINDOW_HIGH_PIXEL_DENSITY
@@ -320,10 +307,6 @@ function Backend.init_window(title, width, height)
     state.clip_w = 0
     state.clip_h = 0
 
-    -- The window is shown immediately when not created with SDL_WINDOW_HIDDEN.
-    -- Treat that as the steady-state startup path instead of re-showing/
-    -- re-raising it later, which can interfere with compositor activation on
-    -- Wayland.
     local text_input = false
     if SDL.SDL_StartTextInput(window) then
         text_input = true
@@ -333,7 +316,6 @@ function Backend.init_window(title, width, height)
         window = window,
         gl_context = gl_context,
         state = state,
-        shown = true,
         text_input = text_input,
     }
 end
@@ -369,18 +351,6 @@ local function native_event_kind(event)
     end
     if event.type == C.SDL_EVENT_WINDOW_RESIZED or event.type == C.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED then
         return "WindowResized"
-    end
-    if event.type == C.SDL_EVENT_WINDOW_SHOWN then
-        return "WindowShown"
-    end
-    if event.type == C.SDL_EVENT_WINDOW_EXPOSED then
-        return "WindowExposed"
-    end
-    if event.type == C.SDL_EVENT_WINDOW_MOUSE_ENTER then
-        return "MouseEnter"
-    end
-    if event.type == C.SDL_EVENT_WINDOW_MOUSE_LEAVE then
-        return "MouseLeave"
     end
     if event.type == C.SDL_EVENT_WINDOW_FOCUS_GAINED then
         return "FocusGained"
@@ -429,9 +399,6 @@ function Backend.poll_native_event(runtime)
     if kind == "Quit" then
         return { kind = "Quit", timestamp_ns = timestamp_ns }
     end
-    if kind == "WindowShown" or kind == "WindowExposed" or kind == "MouseEnter" or kind == "MouseLeave" then
-        return { kind = kind, timestamp_ns = timestamp_ns }
-    end
     if kind == "WindowResized" then
         local w = ffi.new("int[1]", 0)
         local h = ffi.new("int[1]", 0)
@@ -468,26 +435,6 @@ end
 
 function Backend.poll_sdl_event(runtime)
     error("TODO: SDL raw event -> UiInput.Event requires an explicit ASDL context and belongs above the backend runtime helper", 2)
-end
-
-function Backend.show_window(runtime)
-    if not runtime or runtime.window == nil or runtime.shown then return end
-    local SDL = Backend.FFI
-    sdl_ok(SDL.SDL_ShowWindow(runtime.window), "SDL_ShowWindow")
-    sdl_ok(SDL.SDL_SyncWindow(runtime.window), "SDL_SyncWindow")
-    if not runtime.text_input then
-        SDL.SDL_StartTextInput(runtime.window)
-        runtime.text_input = true
-    end
-    runtime.shown = true
-end
-
-function Backend.activate_window(runtime)
-    -- On Wayland/focused-window systems, explicit raise/activate requests are
-    -- often ignored or can interfere with the compositor's normal activation
-    -- path. Keep this as a no-op beyond ensuring the window is shown.
-    if not runtime or runtime.window == nil then return end
-    Backend.show_window(runtime)
 end
 
 function Backend.swap_window(runtime)

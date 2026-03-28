@@ -16,23 +16,14 @@ return U.spec {
     },
 
     install = function(T)
-        local SessionApply = require("examples.ui.ui_session_apply")
-        local Layout = require("examples.ui.ui_decl_layout")
-        local Batching = require("examples.ui.ui_laid_batch")
-        local Routing = require("examples.ui.ui_laid_route")
-        local Backend = require("examples.ui.ui_batched_compile")
-        local Logic = require("examples.tasks.tasks_app_logic")
-        local Decode = require("examples.tasks.tasks_view_decode")
-        local Lower = require("examples.tasks.tasks_view_lower")
+        require("examples.ui.ui_session_state")(T)
+        require("examples.ui.ui_decl_document")(T)
+        require("examples.ui.ui_laid_scene_batch")(T)
+        require("examples.ui.ui_laid_scene_route")(T)
+        require("examples.ui.ui_batched")(T)
 
-        SessionApply.install(T)
-        Layout.install(T)
-        Batching.install(T)
-        Routing.install(T)
-        Backend.install(T)
-
-        Logic.install(T)
-        Decode.install(T)
-        Lower.install(T)
+        require("examples.tasks.task_app_state")(T)
+        require("examples.tasks.task_view_screen")(T)
+        require("examples.tasks.task_view")(T)
     end,
 }

@@ -2,7 +2,6 @@ local U = require("unit")
 local F = require("fun")
 local Text = require("examples.ui.ui_text_resolve")
 
-local Batching = {}
 local unpack_fn = table.unpack or unpack
 
 local function L(xs)
@@ -222,7 +221,7 @@ element_batches = terralib.memoize(function(T, element)
     return chain_lists { pre, children, post }
 end)
 
-function Batching.install(T)
+return function(T)
     T.UiLaid.Scene.batch = U.transition(function(scene)
         local roots = F.iter(scene.roots):map(function(root)
             return element_batches(T, root.root)
@@ -243,5 +242,3 @@ function Batching.install(T)
         )
     end)
 end
-
-return Batching
