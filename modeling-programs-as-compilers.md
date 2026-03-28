@@ -1179,15 +1179,142 @@ The modeling method (Sections 1-6) gives you a first draft of the ASDL. That dra
 
 ### 10.1 Write the leaf you want to write
 
-Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one ASDL node and produces a Unit for the machine. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
+Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one phase-local node and produces a `Unit` for the machine. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
 
-The leaf immediately tells you what the node must contain. A sine oscillator leaf needs frequency, waveform shape, gain. A biquad filter leaf needs pre-computed coefficients. A text renderer leaf needs resolved font metrics and glyph positions. If the ASDL node doesn't have those fields — if the leaf can't get what it needs from its single argument — the ASDL is wrong.
+This is not a trick for implementation. It is the core design method.
+
+After you identify the top-level domain nouns and draft the source ASDL, the next question is not:
+
+> how do I fit this feature into the current runtime architecture?
+
+The next question is:
+
+> what machine do I wish I could install?
+
+That means imagining the highest-performance stable kernel that would execute this domain well:
+
+- what would the terminal `fn` actually do in the hot path?
+- what would its `state_t` need to own live across calls?
+- what values should be baked into code?
+- what values should stay live in state?
+- should it walk a tree, or a flat plan, or a packed command stream?
+- should it be one monomorphic runner, or a composition of genuine submachines?
+
+Only after you can picture that machine should you ask what phase-local data structure would feed it cleanly.
+
+The leaf immediately tells you what its input node must contain. A sine oscillator leaf needs frequency, waveform shape, gain. A biquad filter leaf needs pre-computed coefficients. A text renderer leaf needs resolved font metrics and glyph positions. A UI kernel leaf may need flat boxes, clip ranges, hit-test regions, and draw commands. If the terminal input node doesn't have those fields — if the leaf can't get what it needs from its single argument — the ASDL is wrong.
 
 Don't fix the leaf. Fix the layer above.
 
+#### Illustration: a UI library designed from the kernel backward
+
+Suppose the source domain for a UI library is something like:
+
+```lua
+Ui.Source.Widget
+    = Row(number id, Widget* children, Constraint* constraints)
+    | Column(number id, Widget* children, Constraint* constraints)
+    | Text(number id, string value, StyleRef style, Binding* bindings)
+    | Button(number id, Widget label, ActionRef action)
+    | Scroll(number id, Widget child, ScrollStateRef scroll)
+```
+
+That is the authored tree — the vocabulary the user or library author works with. It is the right source shape because UI is authored hierarchically.
+
+Now stop looking at the source tree and imagine the installed machine you actually WANT.
+
+A high-performance UI kernel probably does **not** want to traverse that authored tree every frame. It probably wants a stable function with one or a few tight loops over flat payload:
+
+```lua
+terra ui_kernel(plan: &UiPlanState, input: &InputState, out: &GpuBuffer)
+    -- walk flat layout boxes
+    -- walk clip ranges
+    -- walk draw commands
+    -- walk hit-test items
+    -- no symbolic refs
+    -- no tree recursion
+    -- no string dispatch
+end
+```
+
+And its live state probably looks more like this than like the source tree:
+
+```lua
+UiPlanState = struct {
+    boxes: BoxLayout[N]
+    clips: ClipRange[M]
+    draws: DrawCmd[K]
+    hits: HitRegion[H]
+    focus: FocusItem[F]
+    scroll_offsets: float[S]
+    cached_text_runs: TextRun[T]
+}
+```
+
+That imagined kernel tells you several truths immediately:
+
+1. The kernel does not want symbolic bindings.
+2. The kernel does not want the authored tree shape.
+3. The kernel does not want unresolved constraints.
+4. The kernel probably wants one stable runner over packed plan data.
+5. Therefore the final phase before compilation should not be `Widget`. It should be something like `Ui.Plan`.
+
+So now you can derive the phase path backward:
+
+```lua
+Ui.Source.WidgetTree
+    ↓ resolve_bindings
+Ui.Resolved.WidgetTree
+    ↓ flatten_regions
+Ui.Flat.Region*
+    ↓ solve_constraints
+Ui.Solved.Region*
+    ↓ build_plan
+Ui.Plan.Scene
+    ↓ compile_kernel
+Unit { fn, state_t }
+```
+
+Notice what happened. The kernel shape forced the terminal input shape. The terminal input shape forced the solved phase. The solved phase forced the flattening phase. The flattening phase forced a prior binding-resolution phase. This is the method.
+
+The source tree was still designed from the user domain. But once the user domain is known, the downstream phases are discovered by asking what the installed machine wants, then recursively asking what each prior layer must provide.
+
+This is what "leaf-first" means in practice:
+
+- not "start with implementation details and retrofit the domain"
+- but "after modeling the domain, design the machine you wish you could install, then derive the ASDL that makes compiling to it mechanical"
+
+#### What to inspect in the imagined kernel
+
+When you imagine the leaf, inspect these questions explicitly.
+
+**Code shape**
+- Is the hot path one stable loop or many small submachines?
+- Should child calls remain visible, or disappear via inlining?
+- Does runtime still dispatch on a sum type that should have been consumed earlier?
+
+**State shape**
+- What facts change often but should not trigger recompilation?
+- What runtime history must persist in `state_t`?
+- What payload should live in parent state rather than in many child Units?
+
+**Memory shape**
+- Does the machine want arrays, trees, command streams, or region-local payload?
+- Should the plan be packed by region, by z-order, by text run, by draw material?
+
+**Boundary shape**
+- What is the ideal function signature?
+- What is the smallest terminal input node that makes the leaf trivial?
+
+These questions are architectural, not micro-optimization. The goal is not to hand-tune LLVM. The goal is to choose the right machine shape so the phases above it become obvious.
+
 ### 10.2 Modify the layer above
 
-The leaf said: "I need frequency on this node." The node is produced by a phase transition. Go to that transition. It must now put frequency onto the node. To do that, it needs frequency from ITS input. If its input doesn't have it, go one layer higher.
+Once the leaf exists — even as a sketch — move exactly one level up. Ask:
+
+> what must the layer above produce so this leaf is trivial?
+
+If the leaf says, "I need resolved coefficients," then the prior phase must produce a node with resolved coefficients. If the leaf says, "I need a flat constraint region with no symbolic refs," then the prior phase must produce exactly that.
 
 ```
 leaf:              "I need resolved coefficients"
@@ -1201,11 +1328,27 @@ lowering:          "I need filter type in authored — get from source"
 source ASDL:       add filter_type field to the filter node
 ```
 
+Or for the UI example:
+
+```
+compile_kernel:    "I need packed draw/hit/layout arrays"
+    ↓
+build_plan:        "I need solved boxes and resolved materials"
+    ↓
+solve_constraints: "I need flat nodes with explicit edges"
+    ↓
+flatten_regions:   "I need a resolved tree with validated bindings"
+    ↓
+resolve_bindings:  "I need explicit IDs/refs in the source tree"
+    ↓
+source ASDL:       add stable widget IDs, typed bindings, typed constraints
+```
+
 This is the recursive process: each layer is shaped by the demands of the layer below it. The source ASDL is the LAST thing that settles, not the first. The modeling method gave you a draft. The leaves correct it.
 
 ### 10.3 Why this gives the earliest ASDL warnings
 
-The leaf compiler is the smallest function in the system — 10-20 lines. It is also the most honest function. It has no room to hide a bad ASDL.
+The leaf compiler is the smallest function in the system — often 10-20 lines. It is also the most honest function. It has no room to hide a bad ASDL.
 
 ```
 Missing field           → ASDL is incomplete, add to source and propagate
@@ -1214,23 +1357,57 @@ Trivial function        → identity noun is too fine-grained (merge nodes)
 Enormous function       → identity noun is too coarse (split the type)
 Needs sibling context   → containment hierarchy is wrong
 Needs global lookup     → missing resolution phase
+Too many tiny calls     → over-lowered fake submachines; use parent state or fusion
+Huge flat rebuild       → flattened too early or lost region identity
 ```
 
-Every one of these is a specific ASDL fix, not a code fix. The leaf is the probe. It discovers the ASDL's flaws at the cheapest possible moment — before you've written the transitions, the composition, the event handling.
+Every one of these is a specific ASDL or phase-design fix, not a code fix. The leaf is the probe. It discovers the model's flaws at the cheapest possible moment — before you've written the transitions, the composition, the event handling.
+
+This is why the kernel sketch matters so much. It exposes whether the bake/live split is wrong:
+
+- if the leaf recompiles for facts that should have stayed live, move them into `state_t`
+- if the leaf is shelling out to many tiny children, the terminal shape is wrong
+- if the leaf wants flat payload but the prior phase still exposes the authored tree, a flattening phase is missing
+- if the leaf still has to resolve names, IDs, bindings, or style inheritance, a resolving phase is missing
+
+The kernel is where optimistic abstraction ends. Either the needed knowledge is there, or it isn't.
 
 ### 10.4 The design cycle
 
 Design and implementation are not sequential. They interleave.
 
 ```
-DESIGN (top-down):        model the domain → draft ASDL → draft phases
-IMPLEMENT (bottom-up):    write leaf → leaf demands → fix layer above → recurse
-CONVERGE:                 the ASDL stabilizes when leaves stop demanding changes
+DESIGN (top-down):
+    model the domain
+    → draft source ASDL
+    → identify coupling points
+    → draft phase path
+
+DISCOVERY (bottom-up):
+    imagine the installed machine
+    → sketch fn + state_t
+    → define the terminal input node it wants
+    → modify the layer above
+    → recurse upward
+
+CONVERGENCE:
+    the ASDL stabilizes when leaves stop demanding changes
 ```
 
-You model a bit (Sections 1-6), implement a leaf, discover the model is wrong, fix it, implement the next leaf. The modeling method tells you WHERE to look — which nouns, which phases, which coupling points. The leaves tell you WHAT to put there — which fields, which resolutions, which phase boundaries. Neither works alone. Together, they converge on the correct ASDL: the one where every leaf is a natural LuaFun chain and every phase transition is obvious.
+This is why the design method has two directions:
 
-The convergence criterion is: **every leaf compiles as a clean LuaFun chain with no reaching, no context arguments, no sibling lookups.** When that's true, the ASDL is done. When it's not, the resistance tells you exactly what to fix and where.
+- **top-down** for the user domain
+- **bottom-up** for the machine shape
+
+Top-down tells you what the user is editing. Bottom-up tells you what the machine must run. The correct pipeline is the one where these meet cleanly in the middle.
+
+You model a bit (Sections 1-6), sketch a kernel, discover the model is wrong, fix it, sketch the next leaf, discover another missing phase, fix that. The modeling method tells you WHERE to look — which nouns, which phases, which coupling points. The leaves tell you WHAT to put there — which fields, which resolutions, which phase boundaries. Neither works alone. Together, they converge on the correct ASDL: the one where every leaf is a natural LuaFun chain, every phase transition has one real verb, and the installed machine is exactly the one you wanted to build.
+
+The convergence criterion is:
+
+**every leaf compiles as a clean structural transform with no reaching, no hidden context, no runtime interpretation of authored structure, and a clear bake/live split between code and `state_t`.**
+
+When that's true, the ASDL is done. When it's not, the resistance tells you exactly what to fix and where.
 
 
 ---

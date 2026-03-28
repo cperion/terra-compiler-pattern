@@ -13,13 +13,16 @@ return U.spec {
         "TaskApp",
         "TaskView",
         "UiDecl",
+        "UiBound",
+        "UiFlat",
+        "UiDemand",
+        "UiResolved",
+        "UiPlan",
     },
 
     install = function(T)
         require("examples.ui.ui_session_state")(T)
         require("examples.ui.ui_decl_document")(T)
-        require("examples.ui.ui_laid_scene_batch")(T)
-        require("examples.ui.ui_laid_scene_route")(T)
         require("examples.ui.ui_batched")(T)
 
         require("examples.tasks.task_app_state")(T)

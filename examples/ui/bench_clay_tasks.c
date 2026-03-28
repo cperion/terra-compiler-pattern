@@ -799,6 +799,7 @@ static void benchmark_scene(const BenchConfig *cfg) {
     Samples full = {0};
     Samples incr = {0};
     Samples apply = {0};
+    Samples steady = {0};
     CommandCounts command_counts = {0};
 
     for (int i = 0; i < cfg->iters; ++i) {
@@ -824,6 +825,19 @@ static void benchmark_scene(const BenchConfig *cfg) {
         samples_push(&apply, t1 - t0);
         samples_push(&incr, t2 - t1);
         if (i == 0 && command_counts.total == 0) command_counts = count_commands(commands);
+    }
+
+    for (int i = 0; i < cfg->warmup; ++i) {
+        Clay_SetPointerState((Clay_Vector2) { 32.0f + (float)i, 48.0f + (float)i }, false);
+        Clay_UpdateScrollContainers(false, (Clay_Vector2) { 0, 0 }, 0.016f);
+    }
+
+    for (int i = 0; i < cfg->iters; ++i) {
+        uint64_t t0 = now_ns();
+        Clay_SetPointerState((Clay_Vector2) { 32.0f + (float)i, 48.0f + (float)i }, false);
+        Clay_UpdateScrollContainers(false, (Clay_Vector2) { 0, 0 }, 0.016f);
+        uint64_t t1 = now_ns();
+        samples_push(&steady, t1 - t0);
     }
 
     printf("scene=%s tasks=%d viewport=%dx%d warmup=%d iters=%d\n",
@@ -869,10 +883,23 @@ static void benchmark_scene(const BenchConfig *cfg) {
         (unsigned long long)samples_percentile(&incr, 0.99),
         (unsigned long long)samples_percentile(&incr, 1.00)
     );
+    printf("mode=steady-state\n");
+    print_stats("steady input", &steady);
+    printf(
+        "BENCH_SUMMARY engine=clay scene=%s tasks=%d mode=steady-state apply_mean_ns=%llu apply_p50_ns=%llu apply_p95_ns=%llu apply_p99_ns=%llu apply_max_ns=%llu\n",
+        cfg->scenario,
+        cfg->tasks,
+        (unsigned long long)samples_mean(&steady),
+        (unsigned long long)samples_percentile(&steady, 0.50),
+        (unsigned long long)samples_percentile(&steady, 0.95),
+        (unsigned long long)samples_percentile(&steady, 0.99),
+        (unsigned long long)samples_percentile(&steady, 1.00)
+    );
 
     samples_free(&full);
     samples_free(&incr);
     samples_free(&apply);
+    samples_free(&steady);
     scene_destroy(&scene);
 }
 

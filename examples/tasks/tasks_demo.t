@@ -183,25 +183,32 @@ local profiler = PROFILE and {
     bridge = stat(),
     project_view = stat(),
     lower = stat(),
-    layout = stat(),
-    route = stat(),
-    batch = stat(),
+    bind = stat(),
+    flat = stat(),
+    demand = stat(),
+    resolve = stat(),
+    plan = stat(),
     compile = stat(),
     render = stat(),
     input_to_present = stat(),
     screen_churn = churn_stat(),
     document_churn = churn_stat(),
-    laid_churn = churn_stat(),
-    batched_churn = churn_stat(),
+    bound_churn = churn_stat(),
+    flat_churn = churn_stat(),
+    demand_churn = churn_stat(),
+    resolved_churn = churn_stat(),
+    plan_churn = churn_stat(),
 } or nil
 
 local function record_compile_profile(phases)
     if not PROFILE then return end
     sample(profiler.project_view, phases.project_view)
     sample(profiler.lower, phases.lower)
-    sample(profiler.layout, phases.layout)
-    sample(profiler.route, phases.route)
-    sample(profiler.batch, phases.batch)
+    sample(profiler.bind, phases.bind)
+    sample(profiler.flat, phases.flat)
+    sample(profiler.demand, phases.demand)
+    sample(profiler.resolve, phases.resolve)
+    sample(profiler.plan, phases.plan)
     sample(profiler.compile, phases.compile)
 end
 
@@ -215,7 +222,7 @@ local function maybe_print_profile(force)
     if profiler.input_to_present.count == 0 then return end
 
     print((
-        "profile changed=%d queue=%.2f/%.2fms ui=%.2f/%.2f bridge=%.2f/%.2f project=%.2f lower=%.2f layout=%.2f route=%.2f batch=%.2f compile=%.2f render=%.2f input->present=%.2f/%.2fms churn screen=%.1f%% doc=%.1f%% laid=%.1f%% batched=%.1f%%"
+        "profile changed=%d queue=%.2f/%.2fms ui=%.2f/%.2f bridge=%.2f/%.2f project=%.2f lower=%.2f bind=%.2f flat=%.2f demand=%.2f resolve=%.2f plan=%.2f compile=%.2f render=%.2f input->present=%.2f/%.2fms churn screen=%.1f%% doc=%.1f%% bound=%.1f%% flat=%.1f%% demand=%.1f%% resolved=%.1f%% plan=%.1f%%"
     ):format(
         profiler.changed_batches,
         ms(avg(profiler.queue_delay)), ms(profiler.queue_delay.max),
@@ -223,16 +230,21 @@ local function maybe_print_profile(force)
         ms(avg(profiler.bridge)), ms(profiler.bridge.max),
         ms(avg(profiler.project_view)),
         ms(avg(profiler.lower)),
-        ms(avg(profiler.layout)),
-        ms(avg(profiler.route)),
-        ms(avg(profiler.batch)),
+        ms(avg(profiler.bind)),
+        ms(avg(profiler.flat)),
+        ms(avg(profiler.demand)),
+        ms(avg(profiler.resolve)),
+        ms(avg(profiler.plan)),
         ms(avg(profiler.compile)),
         ms(avg(profiler.render)),
         ms(avg(profiler.input_to_present)), ms(profiler.input_to_present.max),
         churn_pct(profiler.screen_churn),
         churn_pct(profiler.document_churn),
-        churn_pct(profiler.laid_churn),
-        churn_pct(profiler.batched_churn)
+        churn_pct(profiler.bound_churn),
+        churn_pct(profiler.flat_churn),
+        churn_pct(profiler.demand_churn),
+        churn_pct(profiler.resolved_churn),
+        churn_pct(profiler.plan_churn)
     ))
 end
 
@@ -240,14 +252,17 @@ end
 local function compile_state(runtime, state, assets)
     Backend.sync_window_size(runtime)
     local view_w, view_h = Backend.window_size(runtime)
+    local viewport = T.UiCore.Size(view_w, view_h)
     if not PROFILE then
         local screen = state:project_view()
         local document = screen:lower()
-        local laid = document:layout(assets, T.UiCore.Size(view_w, view_h))
-        local routed = laid:route()
-        local batched = laid:batch()
-        local unit = batched:compile(assets)
-        return routed, unit, nil, nil
+        local bound = document:bind()
+        local flat = bound:flat(viewport)
+        local demand = flat:demand(assets)
+        local resolved = demand:resolve()
+        local plan = resolved:plan(assets)
+        local compiled = plan:compile(assets)
+        return compiled.route_queries, compiled, nil, nil
     end
 
     local t0 = now_ns()
@@ -255,26 +270,35 @@ local function compile_state(runtime, state, assets)
     local t1 = now_ns()
     local document = screen:lower()
     local t2 = now_ns()
-    local laid = document:layout(assets, T.UiCore.Size(view_w, view_h))
+    local bound = document:bind()
     local t3 = now_ns()
-    local routed = laid:route()
+    local flat = bound:flat(viewport)
     local t4 = now_ns()
-    local batched = laid:batch()
+    local demand = flat:demand(assets)
     local t5 = now_ns()
-    local unit = batched:compile(assets)
+    local resolved = demand:resolve()
     local t6 = now_ns()
-    return routed, unit, {
+    local plan = resolved:plan(assets)
+    local t7 = now_ns()
+    local compiled = plan:compile(assets)
+    local t8 = now_ns()
+    return compiled.route_queries, compiled, {
         project_view = t1 - t0,
         lower = t2 - t1,
-        layout = t3 - t2,
-        route = t4 - t3,
-        batch = t5 - t4,
-        compile = t6 - t5,
+        bind = t3 - t2,
+        flat = t4 - t3,
+        demand = t5 - t4,
+        resolve = t6 - t5,
+        plan = t7 - t6,
+        compile = t8 - t7,
     }, {
         screen = screen,
         document = document,
-        laid = laid,
-        batched = batched,
+        bound = bound,
+        flat = flat,
+        demand = demand,
+        resolved = resolved,
+        plan = plan,
     }
 end
 
@@ -370,7 +394,7 @@ local ui_session = T.UiSession.State(
     nil
 )
 
-local routed, unit, _, prev_trees = compile_state(runtime, state, assets)
+local route_queries, unit, _, prev_trees = compile_state(runtime, state, assets)
 Backend.render_unit(runtime, unit)
 
 while state.running do
@@ -391,7 +415,7 @@ while state.running do
             local input = ui_input_from_native(native)
             if input then
                 local t0 = PROFILE and now_ns() or nil
-                local ui_apply = ui_session:apply(routed, input)
+                local ui_apply = ui_session:apply(route_queries, input)
                 local t1 = PROFILE and now_ns() or nil
                 local next_ui_session = ui_apply.session
                 local next_state = Bridge.apply_ui(state, ui_apply)
@@ -423,14 +447,17 @@ while state.running do
 
     if compile_dirty and state.running then
         local phases, trees
-        routed, unit, phases, trees = compile_state(runtime, state, assets)
+        route_queries, unit, phases, trees = compile_state(runtime, state, assets)
         if PROFILE then
             record_compile_profile(phases)
             if prev_trees and trees then
                 sample_churn(profiler.screen_churn, prev_trees.screen, trees.screen)
                 sample_churn(profiler.document_churn, prev_trees.document, trees.document)
-                sample_churn(profiler.laid_churn, prev_trees.laid, trees.laid)
-                sample_churn(profiler.batched_churn, prev_trees.batched, trees.batched)
+                sample_churn(profiler.bound_churn, prev_trees.bound, trees.bound)
+                sample_churn(profiler.flat_churn, prev_trees.flat, trees.flat)
+                sample_churn(profiler.demand_churn, prev_trees.demand, trees.demand)
+                sample_churn(profiler.resolved_churn, prev_trees.resolved, trees.resolved)
+                sample_churn(profiler.plan_churn, prev_trees.plan, trees.plan)
             end
             prev_trees = trees or prev_trees
         end

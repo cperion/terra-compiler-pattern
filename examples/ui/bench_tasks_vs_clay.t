@@ -295,26 +295,39 @@ local function materialize(state, assets, viewport)
     local t1 = now_ns()
     local document = screen:lower()
     local t2 = now_ns()
-    local laid = document:layout(assets, viewport)
+    local bound = document:bind()
     local t3 = now_ns()
-    local routed = laid:route()
+    local flat = bound:flat(viewport)
     local t4 = now_ns()
-    local batched = laid:batch()
+    local demand = flat:demand(assets)
     local t5 = now_ns()
+    local resolved = demand:resolve()
+    local t6 = now_ns()
+    local plan = resolved:plan(assets)
+    local t7 = now_ns()
+    local compiled = plan:compile(assets)
+    local t8 = now_ns()
 
     return {
         screen = screen,
         document = document,
-        laid = laid,
-        routed = routed,
-        batched = batched,
+        bound = bound,
+        flat = flat,
+        demand = demand,
+        resolved = resolved,
+        plan = plan,
+        routes = compiled.routes,
+        compiled = compiled,
         times = {
             project_view = t1 - t0,
             lower = t2 - t1,
-            layout = t3 - t2,
-            route = t4 - t3,
-            batch = t5 - t4,
-            total = t5 - t0,
+            bind = t3 - t2,
+            flat = t4 - t3,
+            demand = t5 - t4,
+            resolve = t6 - t5,
+            plan = t7 - t6,
+            compile = t8 - t7,
+            total = t8 - t0,
         }
     }
 end
@@ -398,21 +411,28 @@ end
 
 local function print_shape_counts(result)
     print((
-        "  nodes screen=%d document=%d laid=%d batched=%d"
+        "  nodes screen=%d document=%d routes hits=%d focus=%d pointer=%d scroll=%d key=%d edit=%d"
     ):format(
         node_size(result.screen),
         node_size(result.document),
-        node_size(result.laid),
-        node_size(result.batched)
+        #(result.routes.hits or {}),
+        #(result.routes.focus_chain or {}),
+        #(result.routes.pointer_routes or {}),
+        #(result.routes.scroll_routes or {}),
+        #(result.routes.key_routes or {}),
+        #(result.routes.edit_routes or {})
     ))
 end
 
 local function print_phase_stats(prefix, phase_samples)
     print(("  %s project_view %s"):format(prefix, fmt_stats(phase_samples.project_view)))
     print(("  %s lower       %s"):format(prefix, fmt_stats(phase_samples.lower)))
-    print(("  %s layout      %s"):format(prefix, fmt_stats(phase_samples.layout)))
-    print(("  %s route       %s"):format(prefix, fmt_stats(phase_samples.route)))
-    print(("  %s batch       %s"):format(prefix, fmt_stats(phase_samples.batch)))
+    print(("  %s bind        %s"):format(prefix, fmt_stats(phase_samples.bind)))
+    print(("  %s flat        %s"):format(prefix, fmt_stats(phase_samples.flat)))
+    print(("  %s demand      %s"):format(prefix, fmt_stats(phase_samples.demand)))
+    print(("  %s resolve     %s"):format(prefix, fmt_stats(phase_samples.resolve)))
+    print(("  %s plan        %s"):format(prefix, fmt_stats(phase_samples.plan)))
+    print(("  %s compile     %s"):format(prefix, fmt_stats(phase_samples.compile)))
     print(("  %s total       %s"):format(prefix, fmt_stats(phase_samples.total)))
 end
 
@@ -425,9 +445,12 @@ local function benchmark_full_rebuild(task_count, scenario, assets, viewport, wa
     local samples = {
         project_view = {},
         lower = {},
-        layout = {},
-        route = {},
-        batch = {},
+        bind = {},
+        flat = {},
+        demand = {},
+        resolve = {},
+        plan = {},
+        compile = {},
         total = {},
     }
 
@@ -456,8 +479,12 @@ local function benchmark_full_rebuild(task_count, scenario, assets, viewport, wa
         total_max_ns = total.max_ns,
         nodes_screen = node_size(first_result.screen),
         nodes_document = node_size(first_result.document),
-        nodes_laid = node_size(first_result.laid),
-        nodes_batched = node_size(first_result.batched),
+        route_hits = #(first_result.routes.hits or {}),
+        route_focus = #(first_result.routes.focus_chain or {}),
+        route_pointer = #(first_result.routes.pointer_routes or {}),
+        route_scroll = #(first_result.routes.scroll_routes or {}),
+        route_key = #(first_result.routes.key_routes or {}),
+        route_edit = #(first_result.routes.edit_routes or {}),
     }
     print_bench_summary_line(summary)
     return summary
@@ -490,16 +517,17 @@ local function benchmark_incremental(task_count, scenario, assets, viewport, war
     local phase_samples = {
         project_view = {},
         lower = {},
-        layout = {},
-        route = {},
-        batch = {},
+        bind = {},
+        flat = {},
+        demand = {},
+        resolve = {},
+        plan = {},
+        compile = {},
         total = {},
     }
     local reuse_samples = {
         screen = {},
         document = {},
-        laid = {},
-        batched = {},
     }
 
     for i = 1, iters do
@@ -512,8 +540,6 @@ local function benchmark_incremental(task_count, scenario, assets, viewport, war
         for k, v in pairs(next.times) do push(phase_samples[k], v) end
         push(reuse_samples.screen, reuse_pct(prev.screen, next.screen))
         push(reuse_samples.document, reuse_pct(prev.document, next.document))
-        push(reuse_samples.laid, reuse_pct(prev.laid, next.laid))
-        push(reuse_samples.batched, reuse_pct(prev.batched, next.batched))
         prev = next
     end
 
@@ -522,15 +548,11 @@ local function benchmark_incremental(task_count, scenario, assets, viewport, war
     print_phase_stats("incr", phase_samples)
     local reuse_screen = mean(reuse_samples.screen)
     local reuse_document = mean(reuse_samples.document)
-    local reuse_laid = mean(reuse_samples.laid)
-    local reuse_batched = mean(reuse_samples.batched)
     print((
-        "  reuse screen=%.1f%% document=%.1f%% laid=%.1f%% batched=%.1f%%"
+        "  reuse screen=%.1f%% document=%.1f%%"
     ):format(
         reuse_screen,
-        reuse_document,
-        reuse_laid,
-        reuse_batched
+        reuse_document
     ))
 
     local apply = summary_stats(apply_samples)
@@ -552,8 +574,68 @@ local function benchmark_incremental(task_count, scenario, assets, viewport, war
         total_max_ns = total.max_ns,
         reuse_screen_pct = reuse_screen,
         reuse_document_pct = reuse_document,
-        reuse_laid_pct = reuse_laid,
-        reuse_batched_pct = reuse_batched,
+    }
+    print_bench_summary_line(summary)
+    return summary
+end
+
+local function benchmark_steady_state(task_count, scenario, assets, viewport, warmup, iters, project_count, tag_count)
+    local base_selected = math.min(2, math.max(1, task_count))
+    local state = make_state(task_count, scenario, project_count, tag_count, base_selected)
+    local compiled = materialize(state, assets, viewport)
+    local route_queries = compiled.compiled.route_queries
+
+    for i = 1, warmup do
+        local input = (scenario == "modal" and T.UiInput.TextEntered("x")) or T.UiInput.PointerMoved(T.UiCore.Point(32 + i, 48 + i))
+        local _ = T.UiSession.State(
+            viewport,
+            T.UiCore.Point(0, 0),
+            false,
+            false,
+            List(),
+            nil,
+            nil,
+            nil,
+            nil
+        ):apply(route_queries, input)
+    end
+
+    local ui_session = T.UiSession.State(
+        viewport,
+        T.UiCore.Point(0, 0),
+        false,
+        false,
+        List(),
+        nil,
+        nil,
+        nil,
+        nil
+    )
+
+    local apply_samples = {}
+    for i = 1, iters do
+        local input = (scenario == "modal" and T.UiInput.TextEntered("x")) or T.UiInput.PointerMoved(T.UiCore.Point(32 + i, 48 + i))
+        local t0 = now_ns()
+        local result = ui_session:apply(route_queries, input)
+        local t1 = now_ns()
+        ui_session = result.session
+        push(apply_samples, t1 - t0)
+    end
+
+    print("  mode=steady-state")
+    print(("  steady ui_apply  %s"):format(fmt_stats(apply_samples)))
+
+    local apply = summary_stats(apply_samples)
+    local summary = {
+        engine = "terra",
+        scene = scenario,
+        tasks = task_count,
+        mode = "steady-state",
+        apply_mean_ns = apply.mean_ns,
+        apply_p50_ns = apply.p50_ns,
+        apply_p95_ns = apply.p95_ns,
+        apply_p99_ns = apply.p99_ns,
+        apply_max_ns = apply.max_ns,
     }
     print_bench_summary_line(summary)
     return summary
@@ -586,7 +668,7 @@ local function main()
 
     RawText.init(nil)
 
-    print("ui benchmark: TaskApp.State -> TaskView.Screen -> UiDecl.Document -> UiLaid.Scene -> UiBatched.Scene")
+    print("ui benchmark: TaskApp.State -> TaskView.Screen -> UiDecl.Document -> UiBound.Document -> UiFlat.Document -> UiDemand.Document -> UiResolved.Document -> UiPlan.Component -> Unit")
     print("clay note: this file defines the scene + timing points for a fair clay.h comparison; it currently benchmarks our side directly.")
     print(("font=%s"):format(font_path))
     print("")
@@ -596,19 +678,23 @@ local function main()
             print_scene_header(scenario, task_count, viewport, warmup, iters)
             local terra_full = benchmark_full_rebuild(task_count, scenario, assets, viewport, warmup, iters, project_count, tag_count)
             local terra_incr = benchmark_incremental(task_count, scenario, assets, viewport, warmup, iters, project_count, tag_count)
+            local terra_steady = benchmark_steady_state(task_count, scenario, assets, viewport, warmup, iters, project_count, tag_count)
             local clay = run_external_clay(scenario, task_count, viewport, warmup, iters, project_count, tag_count)
             if clay and clay["full-rebuild"] and clay["incremental-edit"] then
                 local clay_full = clay["full-rebuild"]
                 local clay_incr = clay["incremental-edit"]
+                local clay_steady = clay["steady-state"]
                 local full_ratio = ratio_value(terra_full.total_mean_ns, clay_full.total_mean_ns)
                 local incr_ratio = ratio_value(terra_incr.total_mean_ns, clay_incr.total_mean_ns)
                 local apply_ratio = ratio_value(terra_incr.apply_mean_ns, clay_incr.apply_mean_ns)
+                local steady_ratio = clay_steady and ratio_value(terra_steady.apply_mean_ns, clay_steady.apply_mean_ns) or nil
                 print((
-                    "  ratio total terra/clay full=%s incr=%s apply=%s"
+                    "  ratio terra/clay full=%s incr=%s incr-apply=%s steady-apply=%s"
                 ):format(
                     ratio_text(full_ratio),
                     ratio_text(incr_ratio),
-                    ratio_text(apply_ratio)
+                    ratio_text(apply_ratio),
+                    ratio_text(steady_ratio)
                 ))
                 local summary = {
                     engine = "comparison",
@@ -619,6 +705,7 @@ local function main()
                 if full_ratio then summary.full_total_ratio = full_ratio end
                 if incr_ratio then summary.incr_total_ratio = incr_ratio end
                 if apply_ratio then summary.incr_apply_ratio = apply_ratio end
+                if steady_ratio then summary.steady_apply_ratio = steady_ratio end
                 print_bench_summary_line(summary)
             end
             print("")

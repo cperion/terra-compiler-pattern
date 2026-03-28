@@ -12,85 +12,32 @@ local function chain_lists(lists)
     return L(F.chain(unpack_fn(lists)):totable())
 end
 
-local function point_in_rect(point, rect)
-    return point.x >= rect.x
-       and point.y >= rect.y
-       and point.x <= rect.x + rect.w
-       and point.y <= rect.y + rect.h
+local function top_hit(route_queries, point)
+    return route_queries:hit_test(point)
 end
 
-local function point_in_hit_shape(shape, point)
-    return U.match(shape, {
-        HitRect = function(v)
-            return point_in_rect(point, v.rect)
-        end,
-        HitRoundedRect = function(v)
-            return point_in_rect(point, v.rect)
-        end,
-    })
+local function hover_route_for(route_queries, element)
+    return route_queries:hover_route(element)
 end
 
-local function top_hit(routed, point)
-    local hits = F.iter(routed.hits)
-        :filter(function(hit)
-            return point_in_hit_shape(hit.shape, point)
-        end)
-        :totable()
-
-    local best = nil
-    for _, hit in ipairs(hits) do
-        if best == nil or hit.z_index >= best.z_index then
-            best = hit
-        end
-    end
-    return best
+local function press_routes_for(route_queries, element, button)
+    return route_queries:press_routes(element, button)
 end
 
-local function first_or_nil(xs)
-    local list = F.iter(xs):totable()
-    return list[1]
+local function focus_entry_for(route_queries, element)
+    return route_queries:focus_entry(element)
 end
 
-local function hover_route_for(routed, element)
-    return first_or_nil(F.iter(routed.pointer_routes)
-        :filter(function(route)
-            return route.kind == "HoverRoute" and route.element == element
-        end))
+local function scroll_route_for(route_queries, element)
+    return route_queries:scroll_route(element)
 end
 
-local function press_routes_for(routed, element, button)
-    return F.iter(routed.pointer_routes)
-        :filter(function(route)
-            return route.element == element
-               and (route.kind == "PressRoute" or route.kind == "ToggleRoute")
-               and route.button.kind == button.kind
-        end)
-        :totable()
+local function edit_route_for(route_queries, element)
+    return route_queries:edit_route(element)
 end
 
-local function focus_entry_for(routed, element)
-    return first_or_nil(F.iter(routed.focus_chain)
-        :filter(function(entry) return entry.element == element end))
-end
-
-local function scroll_route_for(routed, element)
-    return first_or_nil(F.iter(routed.scroll_routes)
-        :filter(function(route) return route.element == element end))
-end
-
-local function edit_route_for(routed, element)
-    return first_or_nil(F.iter(routed.edit_routes)
-        :filter(function(route) return route.element == element end))
-end
-
-local function key_routes_for(routed, focused, chord, when)
-    return F.iter(routed.key_routes)
-        :filter(function(route)
-            return route.when.kind == when.kind
-               and route.chord == chord
-               and (route.global or route.scope == focused)
-        end)
-        :totable()
+local function key_routes_for(route_queries, focused, chord, when)
+    return route_queries:key_routes_for(focused, chord, when)
 end
 
 local function pressed_without(state, button)
@@ -161,16 +108,13 @@ end
 
 local function button_press_intents(T, routes)
     return L(F.iter(routes):map(function(route)
-        return U.match(route, {
-            PressRoute = function(v)
-                return T.UiIntent.Command(v.command, v.element, v.semantic_ref)
-            end,
-            ToggleRoute = function(v)
-                return T.UiIntent.Toggle(v.command, v.value, v.element, v.semantic_ref)
-            end,
-            HoverRoute = function(_) error("unreachable", 2) end,
-            GestureRoute = function(_) error("unreachable", 2) end,
-        })
+        if route.kind == "PressRoute" then
+            return T.UiIntent.Command(route.command, route.element, route.semantic_ref)
+        end
+        if route.kind == "ToggleRoute" then
+            return T.UiIntent.Toggle(route.command, route.value, route.element, route.semantic_ref)
+        end
+        error("unreachable", 2)
     end):totable())
 end
 

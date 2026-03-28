@@ -615,6 +615,165 @@ module UiDecl {
 
 
 
+module UiBound {
+
+    -- ------------------------------------------------------------------------
+    -- Canonicalized UI compiler input.
+    -- Consumes the authored roots/overlays split into one ordered entry list.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        Entry* entries
+    ) unique
+
+    Entry = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Node root,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer
+    ) unique
+
+    Node = (
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        UiDecl.Flags flags,
+        UiDecl.Layout layout,
+        UiDecl.Paint paint,
+        UiDecl.Content content,
+        UiDecl.Behavior behavior,
+        UiDecl.Accessibility accessibility,
+        Node* children
+    ) unique
+}
+
+
+
+module UiFlat {
+
+    -- ------------------------------------------------------------------------
+    -- Internal flattened topology phase.
+    --
+    -- This is the machine-facing shape of the bound UI tree:
+    --   - one flat node array
+    --   - explicit parent/child/subtree spans
+    --   - entry roots point at node indices instead of nesting tables
+    --
+    -- Important:
+    --   UiFlat does NOT yet answer final layout.
+    --   It only preserves authored semantics in a traversal-friendly shape.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        Region* regions,
+        UiCore.Size viewport
+    ) unique
+
+    Region = (
+        UiCore.ElementId id,
+        string? debug_name,
+        number root_index,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer,
+        Node* nodes
+    ) unique
+
+    Node = (
+        number index,
+        number? parent_index,
+        number? first_child_index,
+        number child_count,
+        number subtree_end,
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        UiDecl.Flags flags,
+        UiDecl.Layout layout,
+        UiDecl.Paint paint,
+        UiDecl.Content content,
+        UiDecl.Behavior behavior,
+        UiDecl.Accessibility accessibility
+    ) unique
+}
+
+
+
+module UiDemand {
+
+    -- ------------------------------------------------------------------------
+    -- Internal demand phase.
+    --
+    -- Each flat node contributes what it wants before parent constraints are
+    -- fully resolved. This is the "what do you want?" layer:
+    --   - intrinsic content size from its own content
+    --   - no final x/y/w/h answers yet
+    --
+    -- This phase stays deliberately small. Parent-constrained size and child
+    -- placement belong in UiResolved.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        Region* regions,
+        UiCore.Size viewport
+    ) unique
+
+    Region = (
+        UiFlat.Region topology,
+        Node* nodes
+    ) unique
+
+    Node = (
+        number index,
+        UiCore.Size intrinsic_content
+    ) unique
+}
+
+
+
+module UiResolved {
+
+    -- ------------------------------------------------------------------------
+    -- Internal resolved layout phase.
+    --
+    -- This phase consumes demand plus parent constraints and answers the final
+    -- box questions:
+    --   - where does each node go?
+    --   - what border/content rect does it get?
+    --   - what subtree extent did its children consume?
+    --   - what clip is active for descendants?
+    --
+    -- After UiResolved, layout ambiguity should be gone.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        Region* regions,
+        UiCore.Size viewport
+    ) unique
+
+    Region = (
+        UiFlat.Region topology,
+        UiDemand.Node* demands,
+        Node* nodes
+    ) unique
+
+    Node = (
+        number index,
+        UiCore.Size outer,
+        UiCore.Rect border_box,
+        UiCore.Rect content_box,
+        UiCore.Size child_extent,
+        UiCore.ClipShape* local_clips,
+        UiCore.ClipShape? active_clip
+    ) unique
+}
+
+
+
 module UiInput {
 
     -- ------------------------------------------------------------------------
@@ -1107,6 +1266,40 @@ module UiRouted {
         number sort_priority,
         UiCore.Rect bounds,
         AccessibilityNode* children
+    ) unique
+}
+
+
+
+module UiPlan {
+
+    -- ------------------------------------------------------------------------
+    -- Internal emit/plan phase.
+    --
+    -- UiPlan is where resolved layout facts are converted into the concrete
+    -- runtime-facing rows the kernel needs:
+    --   - renderer batches / draw rows
+    --   - hit / focus / pointer / key / edit routes
+    --   - accessibility rows
+    --
+    -- In the target lower-half pipeline this should consume UiResolved, not the
+    -- authored tree. By this point layout uncertainty should already be gone.
+    -- ------------------------------------------------------------------------
+
+    Component = (
+        Region* regions,
+        UiCore.Size viewport
+    ) unique
+
+    Region = (
+        UiBatched.Batch* batches,
+        UiRouted.HitEntry* hits,
+        UiRouted.FocusEntry* focus_chain,
+        UiRouted.PointerRoute* pointer_routes,
+        UiRouted.ScrollRoute* scroll_routes,
+        UiRouted.KeyRoute* key_routes,
+        UiRouted.EditRoute* edit_routes,
+        UiRouted.AccessibilityNode* accessibility
     ) unique
 }
 
