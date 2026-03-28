@@ -1,0 +1,12 @@
+METRIC backend luajit
+METRIC block 4096
+METRIC chain_len 8
+METRIC compile_biquad_avg_ns 3211.625
+METRIC compile_chain_avg_ns 49603.8125
+METRIC compile_gain_avg_ns 1606.75
+METRIC compile_iterations 16
+METRIC exec_biquad_ns_per_sample 1.940845489502
+METRIC exec_chain_ns_per_sample 10.886669158936
+METRIC exec_gain_ns_per_sample 0.41952896118164
+METRIC iterations 128
+METRIC warmup 32

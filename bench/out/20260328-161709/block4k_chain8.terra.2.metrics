@@ -1,0 +1,12 @@
+METRIC backend terra
+METRIC block 4096
+METRIC chain_len 8
+METRIC compile_biquad_avg_ns 5237851.5625
+METRIC compile_chain_avg_ns 39861444.1875
+METRIC compile_gain_avg_ns 5197175.8125
+METRIC compile_iterations 16
+METRIC exec_biquad_ns_per_sample 2.0895709991455
+METRIC exec_chain_ns_per_sample 10.07505607605
+METRIC exec_gain_ns_per_sample 0.027383804321289
+METRIC iterations 128
+METRIC warmup 32

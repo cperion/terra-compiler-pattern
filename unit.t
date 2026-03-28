@@ -15,7 +15,8 @@
 --           ↑                        │
 --           └────────────────────────┘
 
-local U = {}
+local U = require("unit_core").new()
+local InspectCore = require("unit_inspect_core")
 
 -- ═══════════════════════════════════════════════════════════════
 -- The empty state type. tuple() with same args returns same type.
@@ -24,8 +25,6 @@ local U = {}
 
 local EMPTY = tuple()
 U.EMPTY = EMPTY
-
-local unpack_fn = table.unpack or unpack
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -240,231 +239,27 @@ end
 -- COMPOSITION WRAPPERS
 -- These are the boundary vocabulary. Each wraps a function
 -- with the appropriate contract.
+--
+-- The backend-independent versions of with_fallback / with_errors /
+-- errors / match / with now live in unit_core.lua.
+-- Terra keeps ownership of memoize / transition / terminal because
+-- they must use terralib.memoize identity caching.
 -- ═══════════════════════════════════════════════════════════════
+
+function U.memoize(fn)
+    return terralib.memoize(fn)
+end
 
 -- transition: memoized ASDL → ASDL transform
 -- The workhorse. Phase narrowing. Knowledge consumed.
 function U.transition(fn)
-    return terralib.memoize(fn)
+    return U.memoize(fn)
 end
 
 -- terminal: memoized ASDL → Unit compilation
 -- Unit.new already validates ABI + calls fn:compile().
 function U.terminal(fn)
-    return terralib.memoize(fn)
-end
-
--- with_fallback: pcall + neutral substitution on failure
--- On throw: returns the neutral value. Pipeline continues.
-function U.with_fallback(fn, neutral)
-    return function(...)
-        local ok, result = pcall(fn, ...)
-        if ok then return result end
-        return neutral
-    end
-end
-
--- with_errors: thread an error collector through the function
--- The function receives errs as its first argument.
--- Returns (result, error_list).
-function U.with_errors(fn)
-    return function(...)
-        local errs = U.errors()
-        local result = fn(errs, ...)
-        return result, errs:get()
-    end
-end
-
-
--- ═══════════════════════════════════════════════════════════════
--- ERROR COLLECTOR
---
--- Collects per-item errors with semantic refs.
--- Used inside boundary implementations.
--- Thread-local (created per boundary call, not shared).
--- ═══════════════════════════════════════════════════════════════
-
-function U.errors()
-    local list = {}
-
-    return {
-        -- Map a list through a function, collect per-item errors.
-        -- Items that fail are replaced with neutral values.
-        --
-        --   fn:         function(item) → result
-        --   neutral_fn: function(item) → fallback value
-        --   ref_field:  string naming the field to use as error ref
-        --               (e.g. "id" → error.ref = item.id)
-        --
-        -- If LuaFun is available, uses fun.iter for lazy evaluation.
-        -- Otherwise falls back to a plain loop.
-        each = function(self, items, fn, ref_field, neutral_fn)
-            local results = {}
-            for i, item in ipairs(items) do
-                local ok, result, child_errs = pcall(function()
-                    return fn(item)
-                end)
-                if ok then
-                    if child_errs then
-                        for _, e in ipairs(child_errs) do
-                            list[#list + 1] = e
-                        end
-                    end
-                    results[i] = result
-                else
-                    list[#list + 1] = {
-                        ref = ref_field and item[ref_field] or i,
-                        err = tostring(result),
-                    }
-                    if neutral_fn then
-                        results[i] = neutral_fn(item)
-                    elseif U._silent_unit then
-                        results[i] = U._silent_unit
-                    end
-                end
-            end
-            return results
-        end,
-
-        -- Call a single function, collect error if it fails.
-        -- Returns the result or the neutral value.
-        call = function(self, target, fn, neutral_fn)
-            local ok, result, child_errs = pcall(fn, target)
-            if ok then
-                if child_errs then
-                    for _, e in ipairs(child_errs) do
-                        list[#list + 1] = e
-                    end
-                end
-                return result
-            end
-            list[#list + 1] = {
-                ref = target and target.id or nil,
-                err = tostring(result),
-            }
-            if neutral_fn then return neutral_fn(target) end
-            return nil
-        end,
-
-        -- Merge a child error list into this collector.
-        merge = function(self, child_errs)
-            if child_errs then
-                for _, e in ipairs(child_errs) do
-                    list[#list + 1] = e
-                end
-            end
-        end,
-
-        -- Return the collected errors (nil if none).
-        get = function(self)
-            if #list > 0 then return list end
-            return nil
-        end,
-    }
-end
-
--- Cache one silent unit for error fallbacks
-U._silent_unit = nil
-local function get_silent()
-    if not U._silent_unit then
-        U._silent_unit = U.silent()
-    end
-    return U._silent_unit
-end
-
-
--- ═══════════════════════════════════════════════════════════════
--- HELPER LIBRARY
--- Pure Lua. No parser. No framework. Just useful functions.
--- ═══════════════════════════════════════════════════════════════
-
--- Exhaustive match on an ASDL sum type.
--- Checks that every variant has a handler.
--- Errors at runtime on first call if a variant is missing.
--- Because boundaries are memoized, first call = only call per input.
---
---   value: an ASDL sum type instance (has .kind field)
---   arms:  table mapping variant name → function(value) → result
---
--- Usage:
---   U.match(device, {
---       NativeDevice  = function(d) ... end,
---       LayerDevice   = function(d) ... end,
---   })
-function U.match(value, arms)
-    local mt = getmetatable(value)
-
-    -- Check exhaustiveness if reflection metadata is available.
-    -- U.inspect(ctx, phases) enriches ASDL sum types with __variants on the
-    -- parent and __sum_parent on each child variant. If that metadata is not
-    -- present yet, U.match still dispatches on value.kind, but cannot prove
-    -- exhaustiveness.
-    if mt then
-        local parent = mt.__sum_parent
-        local variants = mt.__variants
-            or (parent and parent.__variants)
-            or {}
-
-        for _, vname in ipairs(variants) do
-            if not arms[vname] then
-                error(("U.match: missing variant '%s' on %s. "
-                    .. "All variants must be handled."):format(
-                    vname,
-                    (parent and parent.__name) or mt.__name or tostring(mt)),
-                    2)
-            end
-        end
-    end
-
-    local kind = value.kind
-    if not kind then
-        error("U.match: value has no .kind field — "
-            .. "is this an ASDL sum type?", 2)
-    end
-
-    local handler = arms[kind]
-    if not handler then
-        error(("U.match: unhandled variant '%s'"):format(kind), 2)
-    end
-
-    return handler(value)
-end
-
-
--- Functional update on an ASDL record.
--- Returns a NEW node with some fields changed. Original untouched.
--- Like Clojure's assoc or Elixir's Map.put.
---
---   node:      an ASDL record instance
---   overrides: table of { field_name = new_value }
---
--- Usage:
---   local louder = U.with(track, { volume_db = -3 })
-function U.with(node, overrides)
-    local mt = getmetatable(node)
-    if not mt then
-        error("U.with: node has no metatable — "
-            .. "is this an ASDL type?", 2)
-    end
-
-    -- ASDL classes store field metadata
-    local fields = mt.__fields
-    if not fields then
-        error("U.with: metatable has no __fields — "
-            .. "is this an ASDL type created by context:Define()?", 2)
-    end
-
-    local args = {}
-    for i, field in ipairs(fields) do
-        local name = field.name or field[1]
-        if overrides[name] ~= nil then
-            args[i] = overrides[name]
-        else
-            args[i] = node[name]
-        end
-    end
-
-    return mt(unpack_fn(args, 1, #fields))
+    return U.memoize(fn)
 end
 
 
@@ -483,47 +278,11 @@ end
 -- ═══════════════════════════════════════════════════════════════
 
 function U.inspect(ctx, phases, pipeline_phases)
-    local function discover_phases()
-        local out = {}
-        local names = {}
-        local namespaces = (ctx and ctx.namespaces) or {}
+    local H = InspectCore.new(U)
 
-        for name, ns in pairs(namespaces) do
-            if type(ns) == "table" then
-                for _, value in pairs(ns) do
-                    if type(value) == "table"
-                        and type(value.isclassof) == "function" then
-                        names[#names + 1] = name
-                        break
-                    end
-                end
-            end
-        end
-
-        table.sort(names)
-        return names
-    end
-
-    phases = phases or discover_phases()
-    if #phases == 0 then phases = discover_phases() end
+    phases = phases or H.discover_phases(ctx)
+    if #phases == 0 then phases = H.discover_phases(ctx) end
     pipeline_phases = pipeline_phases or phases
-
-    local function basename(name)
-        if not name then return nil end
-        return name:match("([^.]+)$") or name
-    end
-
-    local function is_asdl_class(value)
-        return type(value) == "table"
-            and type(value.isclassof) == "function"
-    end
-
-    local function field_type_string(field)
-        local suffix = ""
-        if field.optional then suffix = "?"
-        elseif field.list then suffix = "*" end
-        return tostring(field.type) .. suffix
-    end
 
     local I = {
         ctx = ctx,
@@ -537,18 +296,10 @@ function U.inspect(ctx, phases, pipeline_phases)
     local class_map = {}
 
     -- Inventory types by phase.
-    for _, phase_name in ipairs(phases) do
+    U.each(phases, function(phase_name)
         local ns = ctx[phase_name]
         if type(ns) == "table" then
-            local names = {}
-            for name, class in pairs(ns) do
-                if is_asdl_class(class) then
-                    names[#names + 1] = name
-                end
-            end
-            table.sort(names)
-
-            for _, name in ipairs(names) do
+            U.each(H.sorted_class_names(ns), function(name)
                 local class = ns[name]
                 local fqname = phase_name .. "." .. name
                 local t = {
@@ -566,15 +317,15 @@ function U.inspect(ctx, phases, pipeline_phases)
                 I.type_map[fqname] = t
                 class_map[class] = t
                 class.__name = class.__name or fqname
-            end
+            end)
         end
-    end
+    end)
 
     -- Derive enum metadata from ASDL parent.members.
-    for _, t in ipairs(I.types) do
+    U.each(I.types, function(t)
         local variant_entries = {}
         if type(t.class.members) == "table" then
-            for member, _ in pairs(t.class.members) do
+            U.each(t.class.members, function(member)
                 if member ~= t.class then
                     local variant_t = class_map[member]
                     variant_entries[#variant_entries + 1] = {
@@ -582,11 +333,11 @@ function U.inspect(ctx, phases, pipeline_phases)
                         type = variant_t,
                         name = (variant_t and variant_t.name)
                             or member.kind
-                            or basename(member.__name)
+                            or H.basename(member.__name)
                             or tostring(member),
                     }
                 end
-            end
+            end)
         end
 
         table.sort(variant_entries, function(a, b)
@@ -595,39 +346,33 @@ function U.inspect(ctx, phases, pipeline_phases)
 
         if #variant_entries > 0 and not t.class.__fields then
             t.kind = "enum"
-            for i, entry in ipairs(variant_entries) do
+            U.each(variant_entries, function(entry)
+                local i = #t.variants + 1
                 t.variants[i] = entry.name
                 t.variant_types[i] = entry.type
                 entry.class.__sum_parent = t.class
-            end
+            end)
             t.class.__variants = t.variants
         end
-    end
-
-    local function is_public_method(name, value)
-        return type(value) == "function"
-            and name ~= "isclassof"
-            and name ~= "init"
-            and not name:match("^__")
-    end
+    end)
 
     -- Discover installed methods.
     -- Sum-type parent methods are copied onto child variant classes by ASDL.
     -- Skip those inherited duplicates so Device:lower() appears once on the
     -- sum parent, not once per variant, unless a variant overrides it.
-    for _, t in ipairs(I.types) do
+    U.each(I.types, function(t)
         local method_names = {}
         local parent = t.class.__sum_parent
-        for name, fn in pairs(t.class) do
-            if is_public_method(name, fn)
+        U.each(U.each_name({ t.class }), function(name)
+            local fn = t.class[name]
+            if H.is_public_method(name, fn)
                 and not (parent and parent[name] == fn) then
                 method_names[#method_names + 1] = name
             end
-        end
-        table.sort(method_names)
+        end)
         t.methods = method_names
 
-        for _, name in ipairs(method_names) do
+        U.each(method_names, function(name)
             I.boundaries[#I.boundaries + 1] = {
                 receiver = t.fqname,
                 receiver_name = t.name,
@@ -636,86 +381,31 @@ function U.inspect(ctx, phases, pipeline_phases)
                 phase = t.phase,
                 type = t,
             }
-        end
-    end
-
-    table.sort(I.boundaries, function(a, b)
-        if a.receiver == b.receiver then
-            return a.name < b.name
-        end
-        return a.receiver < b.receiver
+        end)
     end)
 
+    H.sort_boundaries(I.boundaries)
+
     local function find_boundary(boundary_name)
-        for _, b in ipairs(I.boundaries) do
-            if b.receiver .. ":" .. b.name == boundary_name then
-                return b
-            end
-        end
-        return nil
+        return H.find_boundary(I.boundaries, boundary_name)
     end
 
     local function is_stub(boundary)
-        local ok, err = pcall(boundary.fn, nil)
-        if ok then return false end
-        return tostring(err):lower():match("not implemented") ~= nil
+        return H.is_stub(boundary)
     end
 
     local function resolve_type_name(type_name, phase_name)
-        if type(type_name) ~= "string" then return nil end
-
-        if I.type_map[type_name] then
-            return type_name
-        end
-
-        if phase_name then
-            local fqname = phase_name .. "." .. type_name
-            if I.type_map[fqname] then
-                return fqname
-            end
-        end
-
-        local match = nil
-        for fqname, _ in pairs(I.type_map) do
-            if basename(fqname) == type_name then
-                if match and match ~= fqname then
-                    return nil
-                end
-                match = fqname
-            end
-        end
-        return match
+        return H.resolve_type_name(I.type_map, type_name, phase_name)
     end
 
     local function direct_refs(t)
-        local refs, seen = {}, {}
-
-        local function add(fqname)
-            if fqname and not seen[fqname] then
-                seen[fqname] = true
-                refs[#refs + 1] = I.type_map[fqname]
-            end
-        end
-
-        if t.kind == "enum" then
-            for _, variant_t in ipairs(t.variant_types) do
-                if variant_t then add(variant_t.fqname) end
-            end
-        end
-
-        for _, field in ipairs(t.fields or {}) do
-            add(resolve_type_name(field.type, t.phase))
-        end
-
-        table.sort(refs, function(a, b)
-            return a.fqname < b.fqname
-        end)
-
-        return refs
+        return H.direct_refs(I.type_map, function(type_name, phase_name)
+            return resolve_type_name(type_name, phase_name)
+        end, t)
     end
 
     function I.find_boundary(boundary_name)
-        return find_boundary(boundary_name)
+        return H.find_boundary(I.boundaries, boundary_name)
     end
 
     function I.resolve_type_name(type_name, phase_name)
@@ -723,7 +413,7 @@ function U.inspect(ctx, phases, pipeline_phases)
     end
 
     function I.is_stub(boundary)
-        return is_stub(boundary)
+        return H.is_stub(boundary)
     end
 
     function I.progress()
@@ -739,34 +429,12 @@ function U.inspect(ctx, phases, pipeline_phases)
             by_phase = {},
         }
 
-        for _, phase_name in ipairs(phases) do
-            info.by_phase[phase_name] = {
-                type_total = 0,
-                record_total = 0,
-                enum_total = 0,
-                variant_total = 0,
-                boundary_total = 0,
-                boundary_real = 0,
-                boundary_stub = 0,
-                boundary_coverage = 0,
-            }
-        end
+        U.each(phases, function(phase_name)
+            info.by_phase[phase_name] = H.new_phase_bucket()
+        end)
 
-        for _, t in ipairs(I.types) do
-            local phase = info.by_phase[t.phase]
-            if not phase then
-                phase = {
-                    type_total = 0,
-                    record_total = 0,
-                    enum_total = 0,
-                    variant_total = 0,
-                    boundary_total = 0,
-                    boundary_real = 0,
-                    boundary_stub = 0,
-                    boundary_coverage = 0,
-                }
-                info.by_phase[t.phase] = phase
-            end
+        U.each(I.types, function(t)
+            local phase = H.ensure_phase_bucket(info.by_phase, t.phase)
 
             phase.type_total = phase.type_total + 1
             if t.kind == "enum" then
@@ -778,23 +446,10 @@ function U.inspect(ctx, phases, pipeline_phases)
                 phase.record_total = phase.record_total + 1
                 info.record_total = info.record_total + 1
             end
-        end
+        end)
 
-        for _, b in ipairs(I.boundaries) do
-            local phase = info.by_phase[b.phase]
-            if not phase then
-                phase = {
-                    type_total = 0,
-                    record_total = 0,
-                    enum_total = 0,
-                    variant_total = 0,
-                    boundary_total = 0,
-                    boundary_real = 0,
-                    boundary_stub = 0,
-                    boundary_coverage = 0,
-                }
-                info.by_phase[b.phase] = phase
-            end
+        U.each(I.boundaries, function(b)
+            local phase = H.ensure_phase_bucket(info.by_phase, b.phase)
 
             phase.boundary_total = phase.boundary_total + 1
             if is_stub(b) then
@@ -804,14 +459,14 @@ function U.inspect(ctx, phases, pipeline_phases)
                 phase.boundary_real = phase.boundary_real + 1
                 info.boundary_real = info.boundary_real + 1
             end
-        end
+        end)
 
-        for _, phase_name in ipairs(phases) do
+        U.each(phases, function(phase_name)
             local phase = info.by_phase[phase_name]
             if phase and phase.boundary_total > 0 then
                 phase.boundary_coverage = phase.boundary_real / phase.boundary_total
             end
-        end
+        end)
 
         if info.boundary_total > 0 then
             info.boundary_coverage = info.boundary_real / info.boundary_total
@@ -837,21 +492,17 @@ function U.inspect(ctx, phases, pipeline_phases)
             local from = pipeline_phases[i]
             local to = pipeline_phases[i + 1]
             local counts = counts_by_phase[from] or {}
-            local names = {}
-            for name, _ in pairs(counts) do
-                names[#names + 1] = name
-            end
-            table.sort(names)
+            local names = U.each_name({ counts })
 
             local verb = "?"
             local best = -1
-            for _, name in ipairs(names) do
+            U.each(names, function(name)
                 local count = counts[name]
                 if count > best then
                     best = count
                     verb = name
                 end
-            end
+            end)
 
             edges[#edges + 1] = {
                 from = from,
@@ -865,115 +516,32 @@ function U.inspect(ctx, phases, pipeline_phases)
     end
 
     function I.type_graph(root_type, max_depth)
-        max_depth = max_depth or 3
-
-        local visited = {}
-        local sections = {}
-
-        local function walk(type_name, depth)
-            if visited[type_name] then return end
-            if depth > max_depth then return end
-
-            local t = I.type_map[type_name]
-            if not t then return end
-
-            visited[type_name] = true
-
-            local indent = string.rep("  ", depth)
-            local lines = {}
-            local title = indent .. "### " .. t.fqname
-            if t.kind == "enum" then
-                title = title .. " (" .. #t.variants .. " variants)"
-            end
-            lines[#lines + 1] = title
-
-            if t.kind == "enum" then
-                for _, vname in ipairs(t.variants) do
-                    lines[#lines + 1] = indent .. "| " .. vname
-                end
-            end
-
-            for _, field in ipairs(t.fields or {}) do
-                lines[#lines + 1] = indent .. "- "
-                    .. tostring(field.name or field[1] or "?")
-                    .. ": " .. field_type_string(field)
-            end
-
-            sections[#sections + 1] = table.concat(lines, "\n")
-
-            if depth >= max_depth then return end
-
-            if t.kind == "enum" then
-                for _, variant_t in ipairs(t.variant_types) do
-                    if variant_t then walk(variant_t.fqname, depth + 1) end
-                end
-            end
-
-            for _, field in ipairs(t.fields or {}) do
-                local ref = resolve_type_name(field.type, t.phase)
-                if ref then walk(ref, depth + 1) end
-            end
-        end
-
-        local root_name = root_type
-        if type(root_type) == "table" and root_type.fqname then
-            root_name = root_type.fqname
-        end
-
-        walk(root_name, 0)
-        return table.concat(sections, "\n\n")
+        return H.render_type_graph(
+            I.type_map,
+            function(type_name, phase_name)
+                return resolve_type_name(type_name, phase_name)
+            end,
+            root_type,
+            max_depth)
     end
 
     function I.prompt_for(boundary_name, max_depth)
-        local b = find_boundary(boundary_name)
+        local b = H.find_boundary(I.boundaries, boundary_name)
         if not b then
             return "boundary not found: " .. tostring(boundary_name)
         end
 
-        local child_items = {}
-        local seen = {}
-        for _, ref_t in ipairs(direct_refs(b.type)) do
-            if ref_t and type(ref_t.class[b.name]) == "function" then
-                local item = ref_t.fqname .. ":" .. b.name .. "()"
-                if not seen[item] then
-                    seen[item] = true
-                    child_items[#child_items + 1] = item
-                end
-            end
-        end
+        local child_items = H.collect_prompt_child_items(
+            I.boundaries,
+            function(t) return direct_refs(t) end,
+            b)
 
-        if #child_items == 0 then
-            for _, other in ipairs(I.boundaries) do
-                if other.phase == b.phase and other.receiver ~= b.receiver then
-                    local item = other.receiver .. ":" .. other.name .. "()"
-                    if not seen[item] then
-                        seen[item] = true
-                        child_items[#child_items + 1] = item
-                    end
-                end
-            end
-        end
-
-        table.sort(child_items)
-
-        local sections = {
-            "## Phase: " .. b.phase,
-            "## Input type: " .. b.receiver,
+        local sections = {}
+        H.append_prompt_sections(
+            sections,
+            b,
             I.type_graph(b.receiver, max_depth or 3),
-            "## Available child boundaries:",
-        }
-
-        if #child_items == 0 then
-            sections[#sections + 1] = "- none"
-        else
-            for _, item in ipairs(child_items) do
-                sections[#sections + 1] = "- " .. item
-            end
-        end
-
-        sections[#sections + 1] = "## Implement: " .. boundary_name
-        sections[#sections + 1] =
-            "## Available: U.match, U.errors, U.with, U.transition, U.terminal"
+            child_items)
 
         return table.concat(sections, "\n\n")
     end
@@ -981,45 +549,9 @@ function U.inspect(ctx, phases, pipeline_phases)
     function I.markdown()
         local lines = { "# Schema Documentation", "" }
 
-        for _, phase_name in ipairs(phases) do
-            lines[#lines + 1] = "## Phase: " .. phase_name
-            lines[#lines + 1] = ""
-
-            for _, t in ipairs(I.types) do
-                if t.phase == phase_name then
-                    lines[#lines + 1] = "### " .. t.fqname
-                        .. " (" .. t.kind .. ")"
-
-                    if t.kind == "enum" then
-                        for _, vname in ipairs(t.variants) do
-                            lines[#lines + 1] = "- `" .. vname .. "`"
-                        end
-                    end
-
-                    for _, field in ipairs(t.fields or {}) do
-                        lines[#lines + 1] = "- `"
-                            .. tostring(field.name or field[1] or "?")
-                            .. ": " .. field_type_string(field) .. "`"
-                    end
-
-                    lines[#lines + 1] = ""
-                end
-            end
-
-            local have_boundaries = false
-            for _, b in ipairs(I.boundaries) do
-                if b.phase == phase_name then
-                    if not have_boundaries then
-                        lines[#lines + 1] = "### Boundaries"
-                        have_boundaries = true
-                    end
-                    lines[#lines + 1] = "- `" .. b.receiver
-                        .. ":" .. b.name .. "()`"
-                end
-            end
-
-            lines[#lines + 1] = ""
-        end
+        U.each(phases, function(phase_name)
+            H.append_phase_markdown(lines, phase_name, I.types, I.boundaries)
+        end)
 
         return table.concat(lines, "\n")
     end
@@ -1028,17 +560,17 @@ function U.inspect(ctx, phases, pipeline_phases)
         local results = {}
         local passed = 0
 
-        for _, b in ipairs(I.boundaries) do
+        U.each(I.boundaries, function(b)
             local result = {
                 boundary = b.receiver .. ":" .. b.name,
                 exists = type(b.fn) == "function",
-                stub = is_stub(b),
+                stub = H.is_stub(b),
             }
             results[#results + 1] = result
             if result.exists and not result.stub then
                 passed = passed + 1
             end
-        end
+        end)
 
         return {
             results = results,
@@ -1048,7 +580,7 @@ function U.inspect(ctx, phases, pipeline_phases)
     end
 
     function I.scaffold(boundary_name)
-        local b = find_boundary(boundary_name)
+        local b = H.find_boundary(I.boundaries, boundary_name)
         if not b then return nil end
 
         local t = b.type
@@ -1062,118 +594,24 @@ function U.inspect(ctx, phases, pipeline_phases)
         }
 
         if t.kind == "enum" then
-            lines[#lines + 1] = "    return U.match(self, {"
-            for _, vname in ipairs(t.variants) do
-                lines[#lines + 1] = "        " .. vname .. " = function(self)"
-                lines[#lines + 1] = "            -- TODO: implement"
-                lines[#lines + 1] = "        end,"
-            end
-            lines[#lines + 1] = "    })"
-            lines[#lines + 1] = "end"
+            H.append_enum_scaffold(lines, t.variants)
             return table.concat(lines, "\n")
         end
 
-        local child_calls = {}
-        for _, field in ipairs(t.fields or {}) do
-            local ref = resolve_type_name(field.type, t.phase)
-            local ref_t = ref and I.type_map[ref] or nil
-            if ref_t and type(ref_t.class[b.name]) == "function" then
-                child_calls[#child_calls + 1] = {
-                    field = field,
-                    ref = ref_t,
-                }
-            end
-        end
+        local child_calls = H.collect_record_scaffold_calls(
+            I.type_map,
+            function(type_name, phase_name)
+                return resolve_type_name(type_name, phase_name)
+            end,
+            t,
+            b.name)
 
-        if #child_calls > 0 then
-            lines[#lines + 1] = "    local errs = U.errors()"
-            lines[#lines + 1] = ""
-
-            for _, call in ipairs(child_calls) do
-                local fname = tostring(call.field.name or call.field[1] or "field")
-                if call.field.list then
-                    lines[#lines + 1] = "    local " .. fname
-                        .. " = errs:each(self." .. fname
-                        .. ", function(x)"
-                    lines[#lines + 1] = "        return x:" .. b.name .. "()"
-                    lines[#lines + 1] = "    end, \"id\")"
-                else
-                    lines[#lines + 1] = "    local " .. fname
-                        .. " = errs:call(self." .. fname
-                        .. ", function(x)"
-                    lines[#lines + 1] = "        return x:" .. b.name .. "()"
-                    lines[#lines + 1] = "    end)"
-                end
-                lines[#lines + 1] = ""
-            end
-
-            lines[#lines + 1] = "    -- TODO: construct return value"
-            lines[#lines + 1] = "    -- return ..., errs:get()"
-        else
-            lines[#lines + 1] = "    -- TODO: implement"
-        end
-
-        lines[#lines + 1] = "end"
+        H.append_record_scaffold(lines, b.name, child_calls)
         return table.concat(lines, "\n")
     end
 
     function I.status()
-        local p = I.progress()
-        local lines = {
-            "Schema inventory:",
-        }
-
-        for _, phase_name in ipairs(phases) do
-            local phase = p.by_phase[phase_name]
-            if phase and phase.type_total > 0 then
-                lines[#lines + 1] = string.format(
-                    "  %-14s types=%d records=%d enums=%d variants=%d",
-                    phase_name .. ":",
-                    phase.type_total,
-                    phase.record_total,
-                    phase.enum_total,
-                    phase.variant_total)
-            end
-        end
-
-        lines[#lines + 1] = string.rep("─", 45)
-        lines[#lines + 1] = string.format(
-            "  %-14s types=%d records=%d enums=%d variants=%d",
-            "Total:",
-            p.type_total,
-            p.record_total,
-            p.enum_total,
-            p.variant_total)
-
-        lines[#lines + 1] = ""
-        lines[#lines + 1] = "Boundary coverage:"
-
-        for _, phase_name in ipairs(phases) do
-            local phase = p.by_phase[phase_name]
-            if phase and phase.boundary_total > 0 then
-                local bar_len = 20
-                local filled = math.floor((phase.boundary_real / phase.boundary_total) * bar_len)
-                local bar = string.rep("█", filled)
-                    .. string.rep("░", bar_len - filled)
-
-                lines[#lines + 1] = string.format(
-                    "  %-14s %s  %d/%d",
-                    phase_name .. ":",
-                    bar,
-                    phase.boundary_real,
-                    phase.boundary_total)
-            end
-        end
-
-        lines[#lines + 1] = string.rep("─", 45)
-        lines[#lines + 1] = string.format(
-            "  %-14s %d/%d (%.1f%%)",
-            "Total:",
-            p.boundary_real,
-            p.boundary_total,
-            p.boundary_coverage * 100)
-
-        return table.concat(lines, "\n")
+        return H.render_status(I.progress(), phases)
     end
 
     return I
@@ -1424,23 +862,18 @@ function U.install_stubs(ctx, plan)
             error("U.install_stubs: unknown namespace '" .. tostring(phase_name) .. "'", 3)
         end
 
-        local names = {}
-        for name, class in pairs(ns) do
+        local out = {}
+        U.each(U.each_name({ ns }), function(name)
+            local class = ns[name]
             if U.is_asdl_class(class)
                 and not class.__sum_parent
                 and not class.kind then
-                names[#names + 1] = name
+                out[#out + 1] = {
+                    fqname = phase_name .. "." .. name,
+                    class = class,
+                }
             end
-        end
-        table.sort(names)
-
-        local out = {}
-        for _, name in ipairs(names) do
-            out[#out + 1] = {
-                fqname = phase_name .. "." .. name,
-                class = ns[name],
-            }
-        end
+        end)
         return out
     end
 
@@ -1465,21 +898,17 @@ function U.install_stubs(ctx, plan)
         return classes_in_namespace(target)
     end
 
-    local targets = {}
-    for target, _ in pairs(plan) do
-        targets[#targets + 1] = target
-    end
-    table.sort(targets)
+    local targets = U.each_name({ plan })
 
-    for _, target in ipairs(targets) do
+    U.each(targets, function(target)
         local verbs = normalize_verbs(plan[target])
         local classes = resolve_target(target)
-        for _, info in ipairs(classes) do
-            for _, verb in ipairs(verbs) do
+        U.each(classes, function(info)
+            U.each(verbs, function(verb)
                 info.class[verb] = U.stub(info.fqname .. ":" .. verb)
-            end
-        end
-    end
+            end)
+        end)
+    end)
 
     return ctx
 end

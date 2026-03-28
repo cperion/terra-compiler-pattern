@@ -486,7 +486,7 @@ module UiDecl {
                   number spread,
                   number dx,
                   number dy,
-                  UiCore.ShadowKind kind,
+                  UiCore.ShadowKind shadow_kind,
                   UiCore.Corners corners
               )
             | Clip(
@@ -502,7 +502,7 @@ module UiDecl {
                   UiCore.BlendMode mode
               )
             | CustomPaint(
-                  number kind,
+                  number family,
                   number payload
               )
 
@@ -522,7 +522,7 @@ module UiDecl {
                   UiCore.ImageStyle style
               )
             | CustomContent(
-                  number kind,
+                  number family,
                   number payload
               )
 
@@ -691,6 +691,94 @@ module UiSession {
 
 
 
+module UiIntent {
+
+    -- ------------------------------------------------------------------------
+    -- Semantic UI outputs.
+    --
+    -- These are the interaction-language products emitted by the pure UI
+    -- reducer after consulting UiPlan's packed query plane. App/domain reducers
+    -- can translate these into app-domain events without having to inspect the
+    -- UI query structures directly.
+    -- ------------------------------------------------------------------------
+
+    CaretMotion = MoveLeft()
+                | MoveRight()
+                | MoveUp()
+                | MoveDown()
+                | MoveLineStart()
+                | MoveLineEnd()
+                | MoveWordLeft()
+                | MoveWordRight()
+
+    EditAction = InsertText(string text)
+               | Backspace()
+               | Delete()
+               | MoveCaret(CaretMotion motion, boolean extend)
+               | SelectAll()
+               | Submit()
+
+    Event = Command(
+                UiCore.CommandRef command,
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Toggle(
+                UiCore.CommandRef? command,
+                UiCore.ToggleValue value,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Scroll(
+                UiCore.ScrollRef? model,
+                number dx,
+                number dy,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Edit(
+                UiCore.TextModelRef model,
+                EditAction action,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CommandRef? changed
+            )
+          | Focus(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Hover(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CursorRef? cursor
+            )
+}
+
+
+
+module UiApply {
+
+    -- ------------------------------------------------------------------------
+    -- Pure UI reducer result.
+    --
+    -- The reducer consumes:
+    --   UiSession.State + UiPlan.Scene + UiInput.Event
+    --
+    -- and produces:
+    --   updated UiSession.State + emitted UiIntent.Event*
+    --
+    -- This keeps interaction as an explicit pure boundary rather than hiding
+    -- semantic dispatch inside backend helpers or callback-style code.
+    -- ------------------------------------------------------------------------
+
+    Result = (
+        UiSession.State session,
+        UiIntent.Event* intents
+    ) unique
+}
+
+
+
 module UiBound {
 
     -- ------------------------------------------------------------------------
@@ -802,7 +890,7 @@ module UiBound {
                   number spread,
                   number dx,
                   number dy,
-                  UiCore.ShadowKind kind,
+                  UiCore.ShadowKind shadow_kind,
                   UiCore.Corners corners
               )
             | Clip(
@@ -818,7 +906,7 @@ module UiBound {
                   UiCore.BlendMode mode
               )
             | CustomPaint(
-                  number kind,
+                  number family,
                   number payload
               )
 
@@ -858,7 +946,7 @@ module UiBound {
             | Text(BoundText text)
             | Image(BoundImage image)
             | CustomContent(
-                  number kind,
+                  number family,
                   number payload
               )
 
@@ -1201,7 +1289,7 @@ module UiDemand {
     DemandModel = NoDemand()
                 | TextDemand(PreparedText text)
                 | ImageDemand(PreparedImage image)
-                | CustomDemand(number kind, number payload)
+                | CustomDemand(number family, number payload)
 
     -- ------------------------------------------------------------------------
     -- Normalized visual input
@@ -1232,11 +1320,11 @@ module UiDemand {
                           number spread,
                           number dx,
                           number dy,
-                          UiCore.ShadowKind kind,
+                          UiCore.ShadowKind shadow_kind,
                           UiCore.Corners corners
                       )
                     | CustomDecor(
-                          number kind,
+                          number family,
                           number payload
                       )
 
@@ -1464,12 +1552,26 @@ module UiSolved {
         number y
     ) unique
 
+    -- Shadow remains first-class through the solved/planned/kernel render path.
+    -- It is not collapsed into CustomDraw because its payload shape is closed
+    -- and known to the core UI vocabulary.
     DrawAtom = BoxDraw(
                    UiCore.Rect rect,
                    UiCore.Brush fill,
                    UiCore.Brush? stroke,
                    number stroke_width,
                    UiCore.StrokeAlign align,
+                   UiCore.Corners corners,
+                   VisualState state
+               )
+             | ShadowDraw(
+                   UiCore.Rect rect,
+                   UiCore.Brush brush,
+                   number blur,
+                   number spread,
+                   number dx,
+                   number dy,
+                   UiCore.ShadowKind shadow_kind,
                    UiCore.Corners corners,
                    VisualState state
                )
@@ -1485,7 +1587,7 @@ module UiSolved {
                    VisualState state
                )
              | CustomDraw(
-                   number kind,
+                   number family,
                    number payload,
                    VisualState state
                )
@@ -1662,9 +1764,15 @@ module UiPlan {
         UiCore.Transform2D? transform
     ) unique
 
+    -- Shadow batching is explicit for the same reason as in UiSolved: it is a
+    -- closed render family, not an open-ended custom escape hatch.
     DrawBatch = BoxBatch(
                     DrawState state,
                     BoxItem* items
+                )
+              | ShadowBatch(
+                    DrawState state,
+                    ShadowItem* items
                 )
               | TextBatch(
                     DrawState state,
@@ -1675,8 +1783,9 @@ module UiPlan {
                     ImageItem* items
                 )
               | CustomBatch(
-                    number kind,
-                    number payload
+                    DrawState state,
+                    number family,
+                    CustomItem* items
                 )
 
     -- Lean render-only items.
@@ -1691,18 +1800,25 @@ module UiPlan {
         UiCore.Corners corners
     ) unique
 
+    ShadowItem = (
+        UiCore.Rect rect,
+        UiCore.Brush brush,
+        number blur,
+        number spread,
+        number dx,
+        number dy,
+        UiCore.ShadowKind shadow_kind,
+        UiCore.Corners corners
+    ) unique
+
     TextRun = (
+        UiCore.TextValue text,
         UiCore.FontRef font,
         number size_px,
         UiCore.Color color,
         UiCore.Rect bounds,
-        GlyphPlacement* glyphs
-    ) unique
-
-    GlyphPlacement = (
-        number glyph_id,
-        number x,
-        number y
+        UiCore.TextWrap wrap,
+        UiCore.TextAlign align
     ) unique
 
     ImageItem = (
@@ -1710,6 +1826,10 @@ module UiPlan {
         UiCore.Rect rect,
         UiCore.ImageSampling sampling,
         UiCore.Corners corners
+    ) unique
+
+    CustomItem = (
+        number payload
     ) unique
 
     -- ------------------------------------------------------------------------
@@ -1820,7 +1940,7 @@ module UiKernel {
     ) unique
 
     CustomFamily = (
-        number kind
+        number family
     ) unique
 
     -- ------------------------------------------------------------------------
@@ -1839,9 +1959,10 @@ module UiKernel {
         UiCore.ClipShape* clips,
         Batch* batches,
         BoxItem* boxes,
+        ShadowItem* shadows,
         TextRun* text_runs,
-        GlyphPlacement* glyphs,
-        ImageItem* images
+        ImageItem* images,
+        CustomItem* customs
     ) unique
 
     -- Region:
@@ -1860,10 +1981,12 @@ module UiKernel {
     -- lists. UiKernel narrows that one step further into a header stream plus
     -- family-specific payload arrays, which mirrors the stable runner's state
     -- layout more closely.
+    -- Kernel batch families mirror the closed render families from UiPlan.
     BatchKind = BoxKind()
+              | ShadowKind()
               | TextKind()
               | ImageKind()
-              | CustomKind(number kind)
+              | CustomKind(number family)
 
     Batch = (
         BatchKind kind,
@@ -1886,19 +2009,25 @@ module UiKernel {
         UiCore.Corners corners
     ) unique
 
+    ShadowItem = (
+        UiCore.Rect rect,
+        UiCore.Brush brush,
+        number blur,
+        number spread,
+        number dx,
+        number dy,
+        UiCore.ShadowKind shadow_kind,
+        UiCore.Corners corners
+    ) unique
+
     TextRun = (
+        UiCore.TextValue text,
         UiCore.FontRef font,
         number size_px,
         UiCore.Color color,
         UiCore.Rect bounds,
-        number glyph_start,
-        number glyph_count
-    ) unique
-
-    GlyphPlacement = (
-        number glyph_id,
-        number x,
-        number y
+        UiCore.TextWrap wrap,
+        UiCore.TextAlign align
     ) unique
 
     ImageItem = (
@@ -1906,6 +2035,10 @@ module UiKernel {
         UiCore.Rect rect,
         UiCore.ImageSampling sampling,
         UiCore.Corners corners
+    ) unique
+
+    CustomItem = (
+        number payload
     ) unique
 }
 

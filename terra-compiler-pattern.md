@@ -2179,6 +2179,8 @@ Performance comes from keeping that separation honest.
 
 The pattern is not Terra-specific. Terra is the first backend — and the best one, because LLVM produces optimal native code and Terra quotes give you zero-cost code composition. But the architecture — ASDL + memoize + pure pipeline + events + Unit — is a model that any backend can implement.
 
+Historically, this document calls it the **Terra Compiler Pattern** because Terra made the architecture obvious first. But the pattern itself has nothing essential to do with Terra syntax. Terra is one way to plug in an LLVM backend. On a JIT-native runtime, much of the backend compiler already exists; the job becomes producing terminal code that is so monomorphic and specialization-friendly that the host JIT can optimize it aggressively.
+
 The pattern is a portable **architecture**, not a portable codebase. Each backend is a real implementation with its own strengths and tradeoffs. But the thinking, the structure, the six primitives, the loop — those are universal.
 
 ### 13.1 The three layers
@@ -2210,6 +2212,8 @@ The pattern is a portable **architecture**, not a portable codebase. Each backen
 ```
 
 The top two layers are pure. They produce ASDL values and Units. The bottom layer is the only thing that touches the real world — it compiles leaf bodies, allocates state, swaps pointers, polls for events, and drives output devices.
+
+This means the same application architecture can have more than one backend at once. The source ASDL, Event ASDL, reducer, transitions, projections, and terminal structure stay the same. What changes is only how the backend realizes a `Unit`, installs it, and drives the world. One app can therefore have a Terra backend and a LuaJIT backend without architectural duplication.
 
 ### 13.2 The backend contract
 
@@ -2244,6 +2248,7 @@ What is **universal** (same on every target):
 - The helpers (match, with, errors)
 - The event loop structure (poll → apply → compile → execute)
 - The app-level domain logic (transitions, events, apply reducer)
+- The requirement that terminals produce backend-friendly, ultra-monomorphic Units
 
 What is **backend-specific** (reimplemented per target):
 
@@ -2259,7 +2264,7 @@ What is **backend-specific** (reimplemented per target):
 
 **Terra + LLVM (native)** — the primary backend. Leaf bodies are Terra quotes that get spliced into generated functions and compiled by LLVM to native code. State is a Terra struct allocated with `terralib.new`. Hot-swap is two Terra globals (function pointer + state pointer). This is the backend described throughout this document. It produces the best output: fully specialized native code with baked constants, zero-dispatch, zero-allocation execution.
 
-**LuaJIT (interpreted)** — for prototyping. Leaf bodies are plain Lua functions. LuaJIT traces through them — not LLVM-fast, but still fast. State is FFI-allocated buffers. Hot-swap is a table field replacement. Same pattern, same architecture, same incremental behavior. No LLVM. Useful for rapid development before writing Terra leaves.
+**LuaJIT (interpreted)** — for prototyping and lightweight deployments, and in many cases as a serious backend in its own right. Leaf bodies are plain Lua functions. LuaJIT traces through them — not LLVM-fast, but still fast. State is FFI-allocated buffers or tables. Hot-swap is a table/closure slot replacement. Same pattern, same architecture, same incremental behavior. No LLVM. Useful for rapid development before writing Terra leaves, and now represented concretely in this repository by `unit_luajit.lua` plus the shared helper layers `unit_core.lua` and `unit_inspect_core.lua`.
 
 **JavaScript (browser)** — leaf bodies are JS closures with baked constants in the closure scope. State is `Float64Array`. Hot-swap is `postMessage` to an AudioWorklet or reassignment of a `requestAnimationFrame` callback. Memoize is a WeakMap keyed on frozen ASDL objects. The pattern works because JS closures with captured constants are effectively "baked" — V8 optimizes them the same way LLVM optimizes constant-folded code.
 
@@ -2297,6 +2302,8 @@ Other backends implement the pattern. Terra implements it optimally.
 ### 13.7 The target is a memoize key
 
 Only the leaves touch the backend. Transitions are ASDL → ASDL — pure data, no code generation. Compose aggregates children — structural, not target-specific. Match, with, errors — pure helpers. The leaf is the single point where "what to compute" becomes "how to compute it."
+
+On Terra, that means explicit staging into LLVM. On LuaJIT, that means producing closures and composition shapes that are monomorphic enough for the trace compiler to specialize. The backend contract is therefore not "use Terra". It is "realize a `Unit` in a form the target can optimize well."
 
 This means the target is just another argument to the terminal:
 
@@ -2867,6 +2874,12 @@ BACKEND INTERFACE (five functions, per target):
     Terra + LLVM:   quotes → native code, struct types, pointer swap
     LuaJIT:         closures → traced Lua, FFI buffers, table swap
     JS + V8:        closures → JIT'd JS, Float64Array, postMessage
+
+CORE INSIGHT:
+    the pattern is not Terra
+    the pattern is modeled data + memoized narrowing + specialized Units
+    Terra is one backend that realizes this explicitly through LLVM
+    JIT-native runtimes realize much of it implicitly if we emit sufficiently monomorphic code
     WASM:           opcodes → .wasm binary, linear memory
 
     The pattern is a portable architecture.
