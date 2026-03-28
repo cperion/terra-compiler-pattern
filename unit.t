@@ -190,13 +190,49 @@ function U.compose(children, params, body)
     end
 
     -- Build the composed function
+    local unit
     if s then
-        return U.new(
+        unit = U.new(
             terra([params], [s]) [body(s, kids, params)] end, S)
     else
-        return U.new(
+        unit = U.new(
             terra([params]) [body(nil, kids, params)] end, EMPTY)
     end
+
+    unit.children = children
+    unit.__composed_kids = kids
+
+    local has_child_init = false
+    local has_child_release = false
+    for _, child in ipairs(children) do
+        has_child_init = has_child_init or (child.state_t ~= EMPTY and child.init ~= nil)
+        has_child_release = has_child_release or (child.state_t ~= EMPTY and child.release ~= nil)
+    end
+
+    if has_child_init and S ~= EMPTY then
+        unit.init = function(state)
+            for i, child in ipairs(children) do
+                local kid = kids[i]
+                if child.state_t ~= EMPTY and child.init and kid.field then
+                    child.init(state[kid.field])
+                end
+            end
+        end
+    end
+
+    if has_child_release and S ~= EMPTY then
+        unit.release = function(state)
+            for i = #children, 1, -1 do
+                local child = children[i]
+                local kid = kids[i]
+                if child.state_t ~= EMPTY and child.release and kid.field then
+                    child.release(state[kid.field])
+                end
+            end
+        end
+    end
+
+    return unit
 end
 
 
@@ -692,48 +728,93 @@ function U.inspect(ctx, phases, pipeline_phases)
 
     function I.progress()
         local info = {
-            total = #I.boundaries,
-            real = 0,
-            stub = 0,
-            coverage = 0,
+            boundary_total = #I.boundaries,
+            boundary_real = 0,
+            boundary_stub = 0,
+            boundary_coverage = 0,
+            type_total = #I.types,
+            record_total = 0,
+            enum_total = 0,
+            variant_total = 0,
             by_phase = {},
         }
 
         for _, phase_name in ipairs(phases) do
             info.by_phase[phase_name] = {
-                total = 0,
-                real = 0,
-                stub = 0,
-                coverage = 0,
+                type_total = 0,
+                record_total = 0,
+                enum_total = 0,
+                variant_total = 0,
+                boundary_total = 0,
+                boundary_real = 0,
+                boundary_stub = 0,
+                boundary_coverage = 0,
             }
+        end
+
+        for _, t in ipairs(I.types) do
+            local phase = info.by_phase[t.phase]
+            if not phase then
+                phase = {
+                    type_total = 0,
+                    record_total = 0,
+                    enum_total = 0,
+                    variant_total = 0,
+                    boundary_total = 0,
+                    boundary_real = 0,
+                    boundary_stub = 0,
+                    boundary_coverage = 0,
+                }
+                info.by_phase[t.phase] = phase
+            end
+
+            phase.type_total = phase.type_total + 1
+            if t.kind == "enum" then
+                phase.enum_total = phase.enum_total + 1
+                phase.variant_total = phase.variant_total + #t.variants
+                info.enum_total = info.enum_total + 1
+                info.variant_total = info.variant_total + #t.variants
+            else
+                phase.record_total = phase.record_total + 1
+                info.record_total = info.record_total + 1
+            end
         end
 
         for _, b in ipairs(I.boundaries) do
             local phase = info.by_phase[b.phase]
             if not phase then
-                phase = { total = 0, real = 0, stub = 0, coverage = 0 }
+                phase = {
+                    type_total = 0,
+                    record_total = 0,
+                    enum_total = 0,
+                    variant_total = 0,
+                    boundary_total = 0,
+                    boundary_real = 0,
+                    boundary_stub = 0,
+                    boundary_coverage = 0,
+                }
                 info.by_phase[b.phase] = phase
             end
 
-            phase.total = phase.total + 1
+            phase.boundary_total = phase.boundary_total + 1
             if is_stub(b) then
-                phase.stub = phase.stub + 1
-                info.stub = info.stub + 1
+                phase.boundary_stub = phase.boundary_stub + 1
+                info.boundary_stub = info.boundary_stub + 1
             else
-                phase.real = phase.real + 1
-                info.real = info.real + 1
+                phase.boundary_real = phase.boundary_real + 1
+                info.boundary_real = info.boundary_real + 1
             end
         end
 
         for _, phase_name in ipairs(phases) do
             local phase = info.by_phase[phase_name]
-            if phase and phase.total > 0 then
-                phase.coverage = phase.real / phase.total
+            if phase and phase.boundary_total > 0 then
+                phase.boundary_coverage = phase.boundary_real / phase.boundary_total
             end
         end
 
-        if info.total > 0 then
-            info.coverage = info.real / info.total
+        if info.boundary_total > 0 then
+            info.boundary_coverage = info.boundary_real / info.boundary_total
         end
 
         return info
@@ -1038,13 +1119,40 @@ function U.inspect(ctx, phases, pipeline_phases)
 
     function I.status()
         local p = I.progress()
-        local lines = {}
+        local lines = {
+            "Schema inventory:",
+        }
 
         for _, phase_name in ipairs(phases) do
             local phase = p.by_phase[phase_name]
-            if phase and phase.total > 0 then
+            if phase and phase.type_total > 0 then
+                lines[#lines + 1] = string.format(
+                    "  %-14s types=%d records=%d enums=%d variants=%d",
+                    phase_name .. ":",
+                    phase.type_total,
+                    phase.record_total,
+                    phase.enum_total,
+                    phase.variant_total)
+            end
+        end
+
+        lines[#lines + 1] = string.rep("─", 45)
+        lines[#lines + 1] = string.format(
+            "  %-14s types=%d records=%d enums=%d variants=%d",
+            "Total:",
+            p.type_total,
+            p.record_total,
+            p.enum_total,
+            p.variant_total)
+
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Boundary coverage:"
+
+        for _, phase_name in ipairs(phases) do
+            local phase = p.by_phase[phase_name]
+            if phase and phase.boundary_total > 0 then
                 local bar_len = 20
-                local filled = math.floor((phase.real / phase.total) * bar_len)
+                local filled = math.floor((phase.boundary_real / phase.boundary_total) * bar_len)
                 local bar = string.rep("█", filled)
                     .. string.rep("░", bar_len - filled)
 
@@ -1052,8 +1160,8 @@ function U.inspect(ctx, phases, pipeline_phases)
                     "  %-14s %s  %d/%d",
                     phase_name .. ":",
                     bar,
-                    phase.real,
-                    phase.total)
+                    phase.boundary_real,
+                    phase.boundary_total)
             end
         end
 
@@ -1061,9 +1169,9 @@ function U.inspect(ctx, phases, pipeline_phases)
         lines[#lines + 1] = string.format(
             "  %-14s %d/%d (%.1f%%)",
             "Total:",
-            p.real,
-            p.total,
-            p.coverage * 100)
+            p.boundary_real,
+            p.boundary_total,
+            p.boundary_coverage * 100)
 
         return table.concat(lines, "\n")
     end
@@ -1205,12 +1313,51 @@ end
 
 
 -- ═══════════════════════════════════════════════════════════════
--- CLI helpers
+-- CLI helpers + schema installation bootstrap
 --
--- Thin reflection CLI over U.inspect(ctx, phases).
+-- Keep this simple:
+--   - ASDL lives in real .t modules that return strings
+--   - one real schema module returns U.spec { ... }
+--   - install boundary methods onto T.Phase.Type inside install = function(T)
+--   - use U.install_stubs(T, plan) to install whole families of stub methods
+--   - point the CLI at that schema module
+--
+-- Minimal example:
+--
+--   local U = require("unit")
+--
+--   local function stub(name)
+--       return function(...)
+--           error(name .. " not implemented", 2)
+--       end
+--   end
+--
+--   return U.spec {
+--       texts = {
+--           require("examples.foo.foo_asdl"),
+--       },
+--       pipeline = {
+--           "Foo",
+--           "Bar",
+--       },
+--       install = function(T)
+--           U.install_stubs(T, {
+--               ["Foo"] = "lower",
+--               ["Bar.Scene"] = "compile",
+--           })
+--       end,
+--   }
+--
+-- Then:
+--   terra unit.t status examples/foo/foo_schema.t
+--   terra unit.t boundaries examples/foo/foo_schema.t
+--   terra unit.t scaffold examples/foo/foo_schema.t Foo.Node:lower
+--
+-- Thin reflection CLI over U.inspect(ctx, phases, pipeline).
 -- No registry, no extra DSL, just a loader that returns:
---   { ctx = T, phases = { ... } }
--- or a function(U) -> that table
+--   { ctx = T, phases = {...}, pipeline = {...} }
+-- or a U.spec { ... } config/result
+-- or a function(U) -> one of those
 -- or (ctx, phases)
 -- ═══════════════════════════════════════════════════════════════
 
@@ -1232,6 +1379,109 @@ end
 
 function U.read_asdl_file(path)
     return U.normalize_asdl_text(U.read_file(path))
+end
+
+function U.is_asdl_class(value)
+    return type(value) == "table"
+        and type(value.isclassof) == "function"
+end
+
+function U.stub(boundary_name)
+    return function(...)
+        error((boundary_name or "boundary") .. " not implemented", 2)
+    end
+end
+
+-- Install stub methods onto ASDL classes.
+--
+-- plan forms:
+--   { ["TaskView"] = "lower" }
+--   { ["TaskApp.State"] = { "apply", "project_view" } }
+--
+-- Namespace keys install onto all top-level classes in that namespace.
+-- Fully qualified type keys install onto one exact ASDL class.
+function U.install_stubs(ctx, plan)
+    if type(ctx) ~= "table" then
+        error("U.install_stubs: ctx must be an ASDL context", 2)
+    end
+    if type(plan) ~= "table" then
+        error("U.install_stubs: plan must be a table", 2)
+    end
+
+    local function normalize_verbs(value)
+        if type(value) == "string" then
+            return { value }
+        end
+        if type(value) == "table" and value[1] ~= nil then
+            return value
+        end
+        error("U.install_stubs: plan values must be a verb string or verb list", 3)
+    end
+
+    local function classes_in_namespace(phase_name)
+        local ns = ctx[phase_name]
+        if type(ns) ~= "table" then
+            error("U.install_stubs: unknown namespace '" .. tostring(phase_name) .. "'", 3)
+        end
+
+        local names = {}
+        for name, class in pairs(ns) do
+            if U.is_asdl_class(class)
+                and not class.__sum_parent
+                and not class.kind then
+                names[#names + 1] = name
+            end
+        end
+        table.sort(names)
+
+        local out = {}
+        for _, name in ipairs(names) do
+            out[#out + 1] = {
+                fqname = phase_name .. "." .. name,
+                class = ns[name],
+            }
+        end
+        return out
+    end
+
+    local function resolve_target(target)
+        if type(target) ~= "string" then
+            error("U.install_stubs: plan keys must be namespace or fully qualified type strings", 3)
+        end
+
+        if target:find(".", 1, true) then
+            local class = ctx.definitions and ctx.definitions[target]
+            if not U.is_asdl_class(class) then
+                error("U.install_stubs: unknown ASDL type '" .. tostring(target) .. "'", 3)
+            end
+            return {
+                {
+                    fqname = target,
+                    class = class,
+                }
+            }
+        end
+
+        return classes_in_namespace(target)
+    end
+
+    local targets = {}
+    for target, _ in pairs(plan) do
+        targets[#targets + 1] = target
+    end
+    table.sort(targets)
+
+    for _, target in ipairs(targets) do
+        local verbs = normalize_verbs(plan[target])
+        local classes = resolve_target(target)
+        for _, info in ipairs(classes) do
+            for _, verb in ipairs(verbs) do
+                info.class[verb] = U.stub(info.fqname .. ":" .. verb)
+            end
+        end
+    end
+
+    return ctx
 end
 
 function U.spec(config)

@@ -14,6 +14,8 @@ return [=[
 --       TaskApp.State
 --         ↓ project_view
 --       TaskView.Screen
+--         ↓ decode (UiIntent -> TaskEvent)
+--       TaskDecode.Result
 --         ↓ lower (+ TaskCommand -> UiCore.CommandRef)
 --       UiDecl.Document
 --
@@ -279,6 +281,23 @@ module TaskEvent {
                 TaskCore.TaskRef task,
                 TaskCore.TaskPriority priority
             )
+}
+
+
+
+module TaskDecode {
+
+    -- ------------------------------------------------------------------------
+    -- Decoded app-event batch from UiIntent.
+    --
+    -- TaskView.Screen consumes app-specific UiIntent semantics:
+    --   command refs, text-model refs, and current visible field values
+    -- and produces reducer-level TaskEvent.Event*.
+    -- ------------------------------------------------------------------------
+
+    Result = (
+        TaskEvent.Event* events
+    ) unique
 }
 
 

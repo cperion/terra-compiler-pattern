@@ -368,6 +368,33 @@ module UiCore {
 
 
 
+module UiAsset {
+
+    -- ------------------------------------------------------------------------
+    -- Explicit non-authored resource catalog.
+    -- These are compiler inputs, not user-authored UI structure and not
+    -- backend-global hidden state.
+    -- ------------------------------------------------------------------------
+
+    FontAsset = (
+        UiCore.FontRef ref,
+        string path
+    ) unique
+
+    ImageAsset = (
+        UiCore.ImageRef ref,
+        string path
+    ) unique
+
+    Catalog = (
+        UiCore.FontRef default_font,
+        FontAsset* fonts,
+        ImageAsset* images
+    ) unique
+}
+
+
+
 module UiDecl {
 
     -- ------------------------------------------------------------------------
@@ -763,6 +790,9 @@ module UiLaid {
     ShapedText = (
         UiCore.Rect bounds,
         number baseline_y,
+        string text,
+        UiCore.TextWrap wrap,
+        UiCore.TextAlign align,
         ShapedLine* lines
     ) unique
 
@@ -776,6 +806,7 @@ module UiLaid {
         UiCore.FontRef font,
         number size_px,
         UiCore.Color color,
+        string text,
         Glyph* glyphs
     ) unique
 
@@ -909,6 +940,13 @@ module UiBatched {
                 UiCore.GlyphAtlasRef atlas,
                 GlyphItem* items
             )
+          | TextBatch(
+                number sort_key,
+                UiCore.ClipShape? clip,
+                UiCore.FontRef font,
+                number size_px,
+                TextItem* items
+            )
           | EffectBatch(
                 number sort_key,
                 UiCore.ClipShape? clip,
@@ -950,6 +988,14 @@ module UiBatched {
         number glyph_id,
         UiCore.Point origin,
         UiCore.Color color
+    ) unique
+
+    TextItem = (
+        string text,
+        UiCore.Rect bounds,
+        UiCore.Color color,
+        UiCore.TextWrap wrap,
+        UiCore.TextAlign align
     ) unique
 
     EffectItem = PushOpacity(number value)
@@ -1092,7 +1138,7 @@ module UiIntent {
 
     Event = Command(
                 UiCore.CommandRef command,
-                UiCore.ElementId element,
+                UiCore.ElementId? element,
                 UiCore.SemanticRef? semantic_ref
             )
           | Toggle(
@@ -1124,6 +1170,28 @@ module UiIntent {
                 UiCore.SemanticRef? semantic_ref,
                 UiCore.CursorRef? cursor
             )
+}
+
+
+
+module UiApply {
+
+    -- ------------------------------------------------------------------------
+    -- Pure interaction application result.
+    --
+    -- The UI reducer consumes:
+    --   UiSession.State + UiRouted.Scene + UiInput.Event
+    -- and produces:
+    --   updated UiSession.State + emitted UiIntent.Event*
+    --
+    -- This keeps interaction as an explicit pure boundary instead of hiding
+    -- routed behavior dispatch inside backend helpers or callback-style code.
+    -- ------------------------------------------------------------------------
+
+    Result = (
+        UiSession.State session,
+        UiIntent.Event* intents
+    ) unique
 }
 
 ]=]

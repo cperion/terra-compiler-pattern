@@ -686,12 +686,16 @@ module DesignUse {
 module DesignApply {
 
     -- ------------------------------------------------------------------------
-    -- Explicit child environment for recipe application.
+    -- Explicit recipe-application environment.
     --
-    -- DesignUse.BindChild / BindChildren name app-owned semantic children.
-    -- Recipe application resolves those refs through this environment while
-    -- constructing UiDecl. This keeps recipe use pure and eliminates hidden
-    -- widget registries or ambient child lookups.
+    -- Recipe application needs more than authored DS data:
+    --   - app-owned semantic children bound into slots
+    --   - stable UiDecl element ids per slot instance
+    --   - app-owned text/scroll/drag bindings where DS affordances require
+    --     concrete UiDecl behavior facts
+    --
+    -- Keeping this explicit avoids hidden widget registries, ambient id
+    -- generation, or callback-style behavior injection during recipe use.
     -- ------------------------------------------------------------------------
 
     Child = (
@@ -701,6 +705,24 @@ module DesignApply {
 
     ChildEnv = (
         Child* children
+    ) unique
+
+    SlotEnv = (
+        DesignCore.SlotRef slot,
+        UiCore.ElementId element_id,
+        UiCore.SemanticRef? semantic_ref,
+        UiCore.TextModelRef? text_model,
+        UiCore.CommandRef? changed,
+        UiCore.ScrollRef? scroll_model,
+        UiCore.DragPayload? drag_payload,
+        UiCore.CommandRef? drag_begin,
+        UiCore.CommandRef? drag_finish,
+        UiCore.CommandRef? drop_command
+    ) unique
+
+    Env = (
+        SlotEnv* slots,
+        ChildEnv children
     ) unique
 }
 
@@ -732,7 +754,6 @@ module DesignResolved {
         number version,
         DesignCore.ThemeRef? default_theme,
         Theme* themes,
-        Recipe* recipes,
         Policy* policies
     ) unique
 
@@ -750,7 +771,8 @@ module DesignResolved {
         DesignCore.ModeRef id,
         string name,
         TokenValue* tokens,
-        RoleValue* roles
+        RoleValue* roles,
+        Recipe* recipes
     ) unique
 
     TokenValue = ColorToken(
@@ -805,6 +827,9 @@ module DesignResolved {
     -- ------------------------------------------------------------------------
     -- Resolved recipes
     -- ------------------------------------------------------------------------
+    -- Recipes are resolved PER MODE because patch values depend on the
+    -- concrete token/role environment selected by theme + mode.
+    --
     -- Structural vocabulary remains the same:
     -- recipes, slots, axes, rules, and constraints stay explicit.
     --

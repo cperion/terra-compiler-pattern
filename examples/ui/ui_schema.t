@@ -6,21 +6,24 @@ return U.spec {
     },
 
     pipeline = {
+        "UiInput",
+        "UiSession",
         "UiDecl",
         "UiLaid",
         "UiBatched",
-        "UiRouted",
     },
 
     install = function(T)
-        local Backend = require("examples.ui.ui_backend")
+        local Backend = require("examples.ui.ui_batched_compile")
+        local SessionApply = require("examples.ui.ui_session_apply")
+        local Layout = require("examples.ui.ui_decl_layout")
+        local Batching = require("examples.ui.ui_laid_batch")
+        local Routing = require("examples.ui.ui_laid_route")
 
-        T.UiBatched.BoxBatch.compile = Backend.compile_box_batch
-        T.UiBatched.ShadowBatch.compile = Backend.compile_shadow_batch
-        T.UiBatched.ImageBatch.compile = Backend.compile_image_batch
-        T.UiBatched.GlyphBatch.compile = Backend.compile_glyph_batch
-        T.UiBatched.EffectBatch.compile = Backend.compile_effect_batch
-        T.UiBatched.CustomBatch.compile = Backend.compile_batch
-        T.UiBatched.Scene.compile = Backend.compile_scene
+        SessionApply.install(T)
+        Layout.install(T)
+        Batching.install(T)
+        Routing.install(T)
+        Backend.install(T)
     end,
 }

@@ -134,6 +134,19 @@ end
 
 A Unit is `{ fn, state_t }` — a compiled Terra function paired with the exact state type it operates on. They are born together, cached together, and retired together. The function only makes sense with this state type. The state type only makes sense for this function. They are one artifact with two parts.
 
+The clean mental model is:
+
+- **ASDL** = the specification of the machine you want installed next
+- **`Unit.fn`** = the behavior of the machine currently installed
+- **`Unit.state_t`** = the live state owned by that installed machine
+
+That framing is critical for performance. When a change is slow, ask:
+
+> Why did this change require a new machine?
+> Why couldn't the currently installed machine keep owning it live in `state_t`?
+
+If you cannot answer that clearly, the bake/live split is probably wrong.
+
 `Unit.new` enforces three things:
 1. `fn` is a real Terra function
 2. If the state type is non-empty, `fn` takes `&state_t` as a parameter (ABI ownership)
@@ -379,6 +392,13 @@ end)
 
 The biquad's state is 4 floats. The gain has no state. Both produce Units. The parent doesn't care — it composes them identically.
 
+This is also where leaf design becomes decisive. The leaf is the first place where you can ask the real performance question:
+
+> What must this machine bake into code?
+> What can this machine continue to own live in `state_t`?
+
+The layers above should be shaped to make that leaf trivial. If the leaf could keep owning a fact live, but the upper phases force it into the machine specification, the system will recompile too often.
+
 The coefficients `b0, b1, b2, a1, a2` are Lua numbers computed at compilation time. They appear in the Terra quote as constants — `[float](b0)` splices the Lua number into the generated code as a float literal. At runtime, there is no coefficient table. No parameter struct. No config lookup. Just constants in the instruction stream, as if a C programmer had written `y = 0.0675f * x + ...`.
 
 ### 2.2 Unit.compose — aggregate children's state
@@ -521,6 +541,65 @@ Session Unit
 One struct. One allocation. Contains all state for all tracks, all effects, all oscillator phases, all filter histories. Allocated once with `terralib.new(SessionState)`. Freed when the session is recompiled and the old state is no longer referenced (Lua GC collects it).
 
 During playback: zero allocations. Zero frees. Zero memory management. The audio callback receives a pointer to this struct and runs arithmetic. That's all it can do.
+
+### 2.5 Do not over-lower live payload into many tiny Units
+
+This is the easiest mistake to make when the pattern starts to feel "clever": you see `Unit.compose`, so you start compiling every small piece of data into its own child Unit. That is wrong unless those children are real submachines with their own meaningful baked behavior.
+
+If the parent is fundamentally one machine with one stable algorithm, then the parent should compile to **one Unit**, and the varying payload should live in the parent's `state_t`.
+
+Wrong shape:
+
+```lua
+UiBatched.Scene
+  -> compile BoxBatch #1 to Unit
+  -> compile BoxBatch #2 to Unit
+  -> compile TextBatch #1 to Unit
+  -> compile TextBatch #2 to Unit
+  -> compose 50 tiny child Units
+```
+
+Right shape:
+
+```lua
+UiBatched.Scene
+  -> flatten render payload into arrays / command stream
+  -> compile ONE stable scene runner
+  -> store the whole render artifact in Scene.state_t
+```
+
+The rule:
+
+- Use `Unit.compose` when children are genuine compiled submachines.
+- Use parent `state_t` when the children are just live payload for one stable runner.
+
+Examples of payload that usually belongs in `state_t`, not in separate child Units:
+
+- packed draw commands
+- render batch arrays
+- glyph/image/quad payload
+- prepared coefficients that change often
+- backend materialization artifacts
+- any "data to walk" consumed by one monomorphic loop
+
+Symptoms of over-lowering:
+
+- many memoize misses in one terminal family
+- each miss is cheap, but there are too many of them
+- LLVM time is dominated by compiling many tiny leaf functions
+- the parent Unit is just a shell that calls child after child after child
+
+Diagnosis:
+
+> this is not a forest of machines
+> this is one machine with a lot of live data
+
+Fix:
+
+> move the payload into the parent `state_t`
+> keep one stable Terra runner
+
+This is not an optimization trick. It is the correct bake/live split.
 
 
 ---
@@ -1802,6 +1881,13 @@ return Unit
 
 Read the excerpt as a shape sketch, not as a claim that the file ends here. The real framework is the single `unit.t`, and that file includes `Unit.inspect(...)`, `Unit.hot_slot(...)`, and other reflection-based QoL without introducing another module or DSL. The file gets longer; the architecture does not.
 
+A practical design rule follows from this:
+
+- the user-facing/source layer may be sketched first to discover the domain
+- but the **leaf must be designed early and treated as decisive**
+
+Why? Because the Unit tells you what machine is actually being installed. The upper layers are only correct if they feed that machine with the right bake/live split. Units deserve extra attention because they determine what everything above them must provide.
+
 
 ---
 
@@ -1865,6 +1951,87 @@ The 200-track session compiles as fast as the 2-track session.
 ```
 
 State size scales linearly with node count. Compilation time is constant per edit (one leaf recompile). Memory is one allocation for the entire state struct. The architecture is O(1) per edit, O(n) in memory, O(n) in initial cold compilation.
+
+### 12.4 Performance debugging is architecture debugging
+
+In this pattern, the first performance question is NOT:
+
+> "what code is hot?"
+
+It is:
+
+> "why did we install a new machine for this change?"
+
+Or, at the leaf:
+
+> "why couldn't the currently installed machine keep owning this fact live in `state_t`?"
+
+That is why the memoize cache is the primary profiler for the pure layer. A miss means a new machine was required. If misses are happening too often, the architecture is baking too much into the machine specification.
+
+Read memoize behavior like this:
+
+- **high miss count**
+  → the system is installing new machines too often
+  → some fact that could have remained live is being baked
+
+- **few misses, high miss cost**
+  → the machine being installed is too large
+  → split the boundary, or compose smaller genuine submachines
+
+- **low hit ratio everywhere**
+  → structural sharing is broken
+  → unchanged source nodes are not preserving identity
+
+- **many tiny misses in one terminal family**
+  → the output is over-lowered
+  → you are compiling many small machines where one machine with live payload would do
+
+The diagnosis is architectural, not algorithmic. Usually the fix is one of:
+
+- move a fact from machine specification to `state_t`
+- restore structural sharing so unchanged nodes keep identity
+- split a boundary that is doing too much
+- merge over-fine leaves into one parent machine with live payload
+
+### 12.5 The leaf performance question
+
+Leaf-first design is not just about correctness. It is also the performance design method.
+
+At the leaf, ask:
+
+> What must this machine bake into code?
+> What can this machine continue to own live in `state_t`?
+
+The upper phases exist to feed that answer correctly.
+
+If the leaf says:
+
+- "this fact changes the instruction shape"
+  → bake it into the machine specification
+
+- "this fact can be owned by the currently installed machine"
+  → keep it live in `state_t`
+
+This is the simplest practical test for the bake/live split.
+
+The mistake to avoid is asking this question too late. Once the middle layers are already shaped around the wrong assumption, the system accumulates accidental recompilation, over-lowered terminals, and fragile performance fixes. Designing the leaf early prevents this. The Unit determines what the layers above must provide.
+
+### 12.6 A warning sign engineers can use immediately
+
+If interaction is slow, ask these two questions in order:
+
+1. **Why did this change require a new machine?**
+2. **Why couldn't the current machine keep owning it live?**
+
+If those questions are hard to answer, the leaf or phase boundary is probably wrong.
+
+That is the operational meaning of the pattern:
+
+- ASDL = machine specification
+- `Unit.fn` = installed machine behavior
+- `Unit.state_t` = live state owned by the installed machine
+
+Performance comes from keeping that separation honest.
 
 
 ---

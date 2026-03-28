@@ -5,7 +5,7 @@
 --
 -- Initial implementation order (leaf first):
 --   1. TTF init/shutdown
---   2. load font by UiCore.FontRef
+--   2. load font by explicit resolved asset path
 --   3. measure text for UiDecl.Content.Text
 --   4. shape/raster simple glyph runs for UiLaid -> UiBatched.GlyphBatch
 -- ============================================================================
@@ -57,7 +57,12 @@ if not rawget(_G, "__terra_ui_text_ffi_cdef") then
         bool TTF_GetStringSize(TTF_Font *font, const char *text, size_t length, int *w, int *h);
         bool TTF_GetStringSizeWrapped(TTF_Font *font, const char *text, size_t length, int wrap_width, int *w, int *h);
 
+        typedef int TTF_HorizontalAlignment;
+
         SDL_Surface *TTF_RenderGlyph_Blended(TTF_Font *font, Uint32 ch, SDL_Color fg);
+        SDL_Surface *TTF_RenderText_Blended(TTF_Font *font, const char *text, size_t length, SDL_Color fg);
+        SDL_Surface *TTF_RenderText_Blended_Wrapped(TTF_Font *font, const char *text, size_t length, SDL_Color fg, int wrap_width);
+        void TTF_SetFontWrapAlignment(TTF_Font *font, TTF_HorizontalAlignment align);
 
         const char *SDL_GetError(void);
         SDL_Surface *SDL_ConvertSurface(SDL_Surface *surface, SDL_PixelFormat format);
@@ -72,19 +77,9 @@ Text.SDL = ffi.load("SDL3", true)
 Text.TTF = ffi.load("SDL3_ttf", true)
 
 Text.initialized = false
-Text.font_paths = {}
 Text.font_cache = {}
-Text.atlas_by_key = {}
-Text.atlas_info = {}
 Text.glyph_cache = {}
-Text.next_atlas_id = 1
-Text.default_font_path = false
-Text.default_font_candidates = {
-    "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-}
+Text.text_cache = {}
 
 function Text.headers()
     if Text.C then return Text.C end
@@ -98,29 +93,6 @@ function Text.headers()
     return Text.C
 end
 
-local function path_exists(path)
-    local f = io.open(path, "rb")
-    if not f then return false end
-    f:close()
-    return true
-end
-
-local function resolve_default_font_path()
-    if Text.default_font_path ~= false then
-        return Text.default_font_path
-    end
-
-    for _, path in ipairs(Text.default_font_candidates) do
-        if path_exists(path) then
-            Text.default_font_path = path
-            return path
-        end
-    end
-
-    Text.default_font_path = nil
-    return nil
-end
-
 local function ttf_error(where)
     error(("%s: %s"):format(where, ffi.string(Text.SDL.SDL_GetError())), 3)
 end
@@ -128,6 +100,13 @@ end
 local function ttf_ok(ok, where)
     if ok then return end
     ttf_error(where)
+end
+
+local function line_size(font, text)
+    local w = ffi.new("int[1]", 0)
+    local h = ffi.new("int[1]", 0)
+    ttf_ok(Text.TTF.TTF_GetStringSize(font, text or "", #(text or ""), w, h), "TTF_GetStringSize")
+    return w[0], h[0]
 end
 
 local function glyph_metrics(font, glyph_id)
@@ -195,7 +174,6 @@ local function surface_to_rgba_bytes(surface)
     ttf_ok(Text.SDL.SDL_LockSurface(rgba), "SDL_LockSurface")
 
     local row_bytes = rgba.w * 4
-    local total = rgba.w * rgba.h * 4
     local src = ffi.cast("uint8_t *", rgba.pixels)
     local bytes = {}
     local k = 1
@@ -211,20 +189,35 @@ local function surface_to_rgba_bytes(surface)
     Text.SDL.SDL_UnlockSurface(rgba)
     Text.SDL.SDL_DestroySurface(rgba)
 
-    return bytes, total
+    return bytes
 end
 
-function Text.register_font(font_ref, path)
-    Text.font_paths[font_ref.value] = path
+local function font_id(font_ref)
+    if font_ref == nil then return 0 end
+    if type(font_ref) == "number" then return font_ref end
+    return font_ref.value
 end
 
-function Text.resolve_font_path(font_ref)
-    local id = font_ref and font_ref.value or 0
-    local path = Text.font_paths[id] or resolve_default_font_path()
-    if not path then
-        error("Text.resolve_font_path: no TTF font path registered and no default system font found", 2)
-    end
-    return path
+local function atlas_id(atlas_ref)
+    if atlas_ref == nil then return nil end
+    if type(atlas_ref) == "number" then return atlas_ref end
+    return atlas_ref.value
+end
+
+local ATLAS_SIZE_SCALE = 65536
+
+local function pack_atlas_id(font_ref, size_px)
+    local resolved_size = math.max(1, math.floor((size_px or 16) + 0.5))
+    return font_id(font_ref) * ATLAS_SIZE_SCALE + resolved_size, resolved_size
+end
+
+local function unpack_atlas_id(atlas_ref)
+    local id = atlas_id(atlas_ref)
+    if id == nil then return nil end
+    return {
+        font_id = math.floor(id / ATLAS_SIZE_SCALE),
+        size_px = id % ATLAS_SIZE_SCALE,
+    }
 end
 
 function Text.init(runtime)
@@ -245,10 +238,8 @@ function Text.shutdown(runtime)
     end
 
     Text.font_cache = {}
-    Text.atlas_by_key = {}
-    Text.atlas_info = {}
     Text.glyph_cache = {}
-    Text.next_atlas_id = 1
+    Text.text_cache = {}
 
     if Text.initialized then
         Text.TTF.TTF_Quit()
@@ -258,19 +249,21 @@ function Text.shutdown(runtime)
     if runtime then runtime.text = nil end
 end
 
-function Text.load_font(runtime, font_ref, size_px)
+function Text.load_font(runtime, font_path, size_px)
     Text.init(runtime)
 
+    if not font_path or font_path == "" then
+        error("Text.load_font: explicit font path is required", 2)
+    end
+
     local resolved_size = math.max(1, math.floor((size_px or 16) + 0.5))
-    local font_id = font_ref and font_ref.value or 0
-    local key = tostring(font_id) .. ":" .. tostring(resolved_size)
+    local key = tostring(font_path) .. ":" .. tostring(resolved_size)
     local cached = Text.font_cache[key]
     if cached then return cached end
 
-    local path = Text.resolve_font_path(font_ref)
-    local font = Text.TTF.TTF_OpenFont(path, resolved_size)
+    local font = Text.TTF.TTF_OpenFont(font_path, resolved_size)
     if font == nil then
-        error(("TTF_OpenFont(%s, %d): %s"):format(path, resolved_size, ffi.string(Text.SDL.SDL_GetError())), 2)
+        error(("TTF_OpenFont(%s, %d): %s"):format(font_path, resolved_size, ffi.string(Text.SDL.SDL_GetError())), 2)
     end
 
     Text.font_cache[key] = font
@@ -278,33 +271,25 @@ function Text.load_font(runtime, font_ref, size_px)
 end
 
 function Text.ensure_atlas(font_ref, size_px)
-    local resolved_size = math.max(1, math.floor((size_px or 16) + 0.5))
-    local font_id = font_ref and font_ref.value or 0
-    local key = tostring(font_id) .. ":" .. tostring(resolved_size)
-    local atlas = Text.atlas_by_key[key]
-    if atlas then return atlas end
-
-    atlas = { value = Text.next_atlas_id }
-    Text.next_atlas_id = Text.next_atlas_id + 1
-
-    Text.atlas_by_key[key] = atlas
-    Text.atlas_info[atlas.value] = {
-        font_ref = font_ref or { value = 0 },
-        size_px = resolved_size,
-    }
-
-    return atlas
+    local id = pack_atlas_id(font_ref, size_px)
+    return id
 end
 
 function Text.lookup_atlas(atlas_ref)
-    return atlas_ref and Text.atlas_info[atlas_ref.value] or nil
+    return unpack_atlas_id(atlas_ref)
 end
 
-function Text.measure(runtime, text_value, text_style, text_layout, max_width)
+function Text.measure(runtime, font_path, text_value, text_style, text_layout, max_width)
     local text = text_value and text_value.value or ""
-    local font_ref = text_style and text_style.font or { value = 0 }
     local size_px = text_style and text_style.size_px or 16
-    local font = Text.load_font(runtime, font_ref, size_px)
+    local font = Text.load_font(runtime, font_path, size_px)
+
+    if text == "" then
+        return {
+            w = 0,
+            h = (text_style and text_style.line_height_px) or Text.TTF.TTF_GetFontHeight(font),
+        }
+    end
 
     local w = ffi.new("int[1]", 0)
     local h = ffi.new("int[1]", 0)
@@ -327,21 +312,18 @@ function Text.measure(runtime, text_value, text_style, text_layout, max_width)
     }
 end
 
-function Text.rasterize_glyph(font_ref, atlas_ref, glyph_id)
-    local atlas_info = Text.lookup_atlas(atlas_ref)
-    if not atlas_info then
-        error(("Text.rasterize_glyph: unknown atlas ref %s"):format(tostring(atlas_ref and atlas_ref.value)), 2)
-    end
-
-    local key = tostring(atlas_ref.value) .. ":" .. tostring(glyph_id)
+function Text.rasterize_glyph(font_path, size_px, glyph_id)
+    local resolved_size = math.max(1, math.floor((size_px or 16) + 0.5))
+    local key = tostring(font_path) .. ":" .. tostring(resolved_size) .. ":" .. tostring(glyph_id)
     local cached = Text.glyph_cache[key]
     if cached then return cached end
 
-    local font = Text.load_font(nil, atlas_info.font_ref or font_ref, atlas_info.size_px)
+    local font = Text.load_font(nil, font_path, resolved_size)
     local metrics = glyph_metrics(font, glyph_id)
 
     if metrics.maxx <= metrics.minx or metrics.maxy <= metrics.miny then
         cached = {
+            cache_key = key,
             glyph_id = glyph_id,
             w = 0,
             h = 0,
@@ -367,6 +349,7 @@ function Text.rasterize_glyph(font_ref, atlas_ref, glyph_id)
     Text.SDL.SDL_DestroySurface(surface)
 
     cached = {
+        cache_key = key,
         glyph_id = glyph_id,
         w = w,
         h = h,
@@ -382,13 +365,61 @@ function Text.rasterize_glyph(font_ref, atlas_ref, glyph_id)
     return cached
 end
 
-function Text.shape(runtime, text_value, text_style, text_layout, bounds)
+local function wrap_alignment(align_kind)
+    if align_kind == "TextCenter" then return 1 end
+    if align_kind == "TextEnd" then return 2 end
+    return 0
+end
+
+function Text.rasterize_text(font_path, size_px, text, color, wrap_kind, align_kind, bounds_w)
+    local resolved_size = math.max(1, math.floor((size_px or 16) + 0.5))
+    local key = table.concat({ tostring(font_path), tostring(resolved_size), text or "", tostring(color.r), tostring(color.g), tostring(color.b), tostring(color.a), tostring(wrap_kind), tostring(align_kind), tostring(bounds_w) }, ":")
+    local cached = Text.text_cache[key]
+    if cached then return cached end
+
+    if text == nil or text == "" then
+        cached = { cache_key = key, w = 0, h = 0, pixels = {} }
+        Text.text_cache[key] = cached
+        return cached
+    end
+
+    local font = Text.load_font(nil, font_path, resolved_size)
+    local fg = ffi.new("SDL_Color", {
+        math.floor((color.r or 1) * 255 + 0.5),
+        math.floor((color.g or 1) * 255 + 0.5),
+        math.floor((color.b or 1) * 255 + 0.5),
+        math.floor((color.a or 1) * 255 + 0.5),
+    })
+    local wrapped = wrap_kind ~= "NoWrap" and bounds_w and bounds_w > 0
+    if wrapped then
+        Text.TTF.TTF_SetFontWrapAlignment(font, wrap_alignment(align_kind))
+    end
+    local surface = wrapped
+        and Text.TTF.TTF_RenderText_Blended_Wrapped(font, text or "", #(text or ""), fg, math.max(1, math.floor(bounds_w + 0.5)))
+        or Text.TTF.TTF_RenderText_Blended(font, text or "", #(text or ""), fg)
+    if surface == nil then
+        ttf_error("TTF_RenderText_Blended")
+    end
+
+    local w = surface.w
+    local h = surface.h
+    local bytes = surface_to_rgba_bytes(surface)
+    Text.SDL.SDL_DestroySurface(surface)
+
+    cached = {
+        cache_key = key,
+        w = w,
+        h = h,
+        pixels = bytes,
+    }
+    Text.text_cache[key] = cached
+    return cached
+end
+
+function Text.shape(runtime, font_path, text_value, text_style, text_layout, bounds)
     local text = text_value and text_value.value or ""
-    local font_ref = text_style and text_style.font or { value = 0 }
     local size_px = text_style and text_style.size_px or 16
-    local color = text_style and text_style.color or { r = 1, g = 1, b = 1, a = 1 }
-    local font = Text.load_font(runtime, font_ref, size_px)
-    local atlas = Text.ensure_atlas(font_ref, size_px)
+    local font = Text.load_font(runtime, font_path, size_px)
 
     local line_height = (text_style and text_style.line_height_px) or Text.TTF.TTF_GetFontHeight(font)
     local ascent = Text.TTF.TTF_GetFontAscent(font)
@@ -406,7 +437,15 @@ function Text.shape(runtime, text_value, text_style, text_layout, bounds)
 
         local cps = codepoints(line_text)
         local baseline_y = y0 + (line_index - 1) * line_height + ascent
+        local line_w = line_size(font, line_text)
         local cursor_x = x0
+        if bounds and text_layout and text_layout.align then
+            if text_layout.align.kind == "TextCenter" then
+                cursor_x = x0 + math.max(0, (bounds.w - line_w) / 2)
+            elseif text_layout.align.kind == "TextEnd" then
+                cursor_x = x0 + math.max(0, bounds.w - line_w)
+            end
+        end
         local previous_glyph = nil
         local glyphs = {}
         local min_x = nil
@@ -459,13 +498,12 @@ function Text.shape(runtime, text_value, text_style, text_layout, bounds)
         end
 
         lines[#lines + 1] = {
+            text = line_text,
             baseline_y = baseline_y,
             ink_bounds = ink_bounds,
             runs = {
                 {
-                    font = font_ref,
                     size_px = size_px,
-                    color = color,
                     glyphs = glyphs,
                 }
             },
@@ -474,13 +512,12 @@ function Text.shape(runtime, text_value, text_style, text_layout, bounds)
         scene_bottom = math.max(scene_bottom, baseline_y + math.abs(Text.TTF.TTF_GetFontDescent(font)))
     end
 
-    local measured = Text.measure(runtime, text_value, text_style, text_layout, bounds and bounds.w or nil)
+    local measured = Text.measure(runtime, font_path, text_value, text_style, text_layout, bounds and bounds.w or nil)
 
     return {
         bounds = bounds or { x = x0, y = y0, w = measured.w, h = measured.h },
         baseline_y = y0 + ascent,
         lines = lines,
-        atlas = atlas,
     }
 end
 
