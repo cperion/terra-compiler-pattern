@@ -2342,6 +2342,190 @@ Instead, the wiring should already have been compiled into ordinary typed shapes
 - resource specifications
 - runtime state schemas
 
+### The header pattern
+
+One especially important consequence of this machine-feeding view is the **header pattern**.
+
+When several later branches must remain aligned after a shared flattening or topology-establishing phase, it is often a mistake to keep widening one giant node record just so every later branch can still find the same thing.
+
+A better design is often:
+
+1. define a **shared structural header vocabulary**
+2. let later branches carry only their own orthogonal fact planes
+3. rejoin those branches structurally through the shared header/index space rather than through semantic lookup
+
+In this pattern, a header is not just metadata.
+It is a typed structural carrier for truths such as:
+
+- stable identity
+- parent/child topology
+- subtree spans
+- region-local index space
+- whatever minimal structural alignment later branches must share
+
+And the key discipline is:
+
+> keep shared structure in the header spine; keep branch-specific meaning in separate fact planes.
+
+This matters because many bad lower designs come from failing to separate those two roles.
+Without a header spine, there is constant pressure to build oversized lower nodes that carry:
+
+- geometry facts
+- render facts
+- query facts
+- accessibility facts
+- routing facts
+- resource facts
+
+all together, merely so later phases can still line them up.
+
+That usually creates exactly the kinds of problems the pattern is trying to eliminate:
+
+- broad node records that rebuild too much
+- hidden coupling between branches
+- expensive late splitting
+- repeated rediscovery of alignment
+- temptation to rejoin branches by ID search or tree walking
+
+The header pattern gives a better alternative.
+A shared flattening phase can establish one canonical structural spine, and then later phases can branch into orthogonal planes while still remaining joinable by construction.
+
+For example, after a shared flat phase, several later branches might all reuse the same region/node header vocabulary while carrying different facts:
+
+- one branch carries geometry input facts
+- one branch carries render-specific facts
+- one branch carries query-specific facts
+- one later phase carries solved geometry
+
+The later projections can then rejoin by shared region-local index rather than by rediscovering semantic relationships.
+
+This is both a modeling improvement and a performance improvement.
+It is a modeling improvement because it forces you to ask a sharper question:
+
+> what truths are genuinely shared structure, and what truths are branch-local facts?
+
+And it is a performance improvement because, with the right ASDL, joins become structural and memo-friendly by construction.
+You do not need extra lookup machinery merely to reconnect truths that should have shared a structural spine from the start.
+
+This also changes how flattening should be understood.
+Flattening is not only a way to make later execution faster.
+It is often the moment where you establish the shared structural header spine for multiple later branches.
+
+That means header design is an ASDL question, not an implementation afterthought.
+A good header vocabulary can make later branches local, orthogonal, and cheaply joinable.
+A bad or missing header vocabulary can force the system back toward giant mixed nodes or ad hoc runtime join logic.
+
+The practical test is:
+
+> if several later branches need the same structural identity/topology but different semantic facts, should there be one shared header spine instead of one wider node type?
+
+Very often, the answer is yes.
+
+In that sense, the header pattern is one of the main ways the compiler pattern turns "multiple derived views of the same structure" into typed, local, memo-friendly phases instead of into an accidental interpreted graph.
+
+### The facet pattern
+
+The header pattern naturally leads to a second design pattern: the **facet pattern**.
+
+If the header spine carries the shared structural truth, then the next question is:
+
+> what different aspects of meaning are attached to that shared structure, and which later consumers actually need which aspects?
+
+A facet is one orthogonal semantic plane aligned to the shared header/index space.
+
+Typical examples are things like:
+
+- layout facts
+- paint facts
+- content facts
+- behavior facts
+- accessibility facts
+
+So instead of widening one lower node record until it carries everything:
+
+- identity
+- topology
+- geometry facts
+- render facts
+- query facts
+- accessibility facts
+
+all together, a better design is often:
+
+1. one shared header spine
+2. several aligned facet planes
+3. branch-specific lowerings that consume only the facets they actually need
+
+In that shape:
+
+- the header answers **what thing is this in the shared structure?**
+- the facet answers **what aspect of that thing are we talking about?**
+
+This is an important ASDL design shift.
+It means lower design should often stop thinking in terms of "one node, but with more fields" and start thinking in terms of:
+
+- shared structural spine
+- orthogonal semantic facets
+- branch-specific consumers
+
+This matters because many bad lower designs come from bundling concerns that do not need to travel together.
+For example:
+
+- geometry solve does not usually need paint facts
+- render lowering does not usually need key-route facts
+- query lowering does not usually need brush and image resource identity
+- accessibility often does not need to travel with render semantics at all
+
+If those concerns are forced into one lower node anyway, the result is usually:
+
+- oversized records
+- broad rebuilds
+- hidden coupling between branches
+- late splitting work
+- repeated recomputation of things that should have stayed orthogonal
+
+The facet pattern gives a cleaner alternative.
+Once a shared flattening phase has established the structural spine, later phases can preserve orthogonality by carrying aligned facet planes and lowering each branch from the facets it truly needs.
+
+For example, one branch might consume:
+
+- header + layout facet + part of content facet
+
+while another consumes:
+
+- header + paint facet + part of content facet
+
+and another consumes:
+
+- header + behavior facet + accessibility facet
+
+That is often a much better design than forcing all of those concerns through a single mixed lower node.
+
+This is also a performance pattern.
+With the right facet split:
+
+- each lowering phase does less semantic work
+- unrelated edits stay more local
+- memoization boundaries stay cleaner
+- joins remain structural through the shared header/index space
+- the system does less work by construction
+
+So the facet pattern is not only an implementation convenience.
+It is one of the ways ASDL design can directly enforce orthogonality, locality, and incremental performance.
+
+The practical test is:
+
+> if several later consumers share the same structure but need different semantic aspects, should those aspects become aligned facet planes instead of one wider lower node?
+
+Very often, the answer is yes.
+
+In that sense, the facet pattern is the semantic companion to the header pattern:
+
+- **headers** carry shared structural truth
+- **facets** carry orthogonal semantic truth
+
+Together, they give a powerful way to design lower ASDL that stays local, branchable, and machine-friendly without collapsing back into a giant interpreted node graph.
+
 In that sense, "querying" still belongs above execution — but only after it has been compiled into typed access paths. Good querying here means:
 
 - read slot `i`
@@ -4245,6 +4429,152 @@ across shared structural workloads.
 
 That makes the backend conclusions meaningful architecturally, not just numerically.
 
+### The recursive benchmarking law
+
+There is a deeper workflow consequence here that is worth stating explicitly.
+
+In this pattern, phases are not only data transformations. Each phase boundary is also the point where one language becomes the next language's execution problem.
+
+That means a phase can be treated in two ways at once:
+
+- as a **compiler** from one representation to another
+- and, once its consumer is trusted, as the **runtime feeder** for the next machine
+
+This yields a powerful recursive design law:
+
+> In a leaf-first workflow, once the leaf for a layer has been benchmarked and made good, the performance of the layer above becomes a direct test of the ASDL and phase design feeding that leaf.
+
+Or more concretely:
+
+> after the lower machine is known-good, compile speed at the next layer is execution speed for that layer's output language.
+
+This is one of the pattern's most practically important insights.
+
+It means performance debugging can proceed upward through the compiler story rather than remaining trapped at the backend leaf.
+
+#### Why this is true in practice
+
+Suppose you start correctly:
+
+1. write the leaf you want
+2. benchmark the leaf
+3. make the leaf/backend realization fast enough
+4. only then move one layer up
+
+At that point, when the next boundary is slow, the obvious excuse is gone.
+You already know the lower machine is good.
+So if the boundary feeding it is still expensive, that boundary is not merely suffering from bad low-level implementation luck.
+It is strong evidence that the representation above it is still wrong for that consumer.
+
+The layer is still doing too much thinking.
+It is still carrying too much unresolved structure.
+It is still interpreting where it should already be compiling.
+
+That is why, in this workflow, slow lowering is not just a local optimization problem.
+It is usually an ASDL diagnostic.
+
+#### The recursive form
+
+This same law applies repeatedly.
+
+- if the final backend leaf is good, then a slow machine-IR projection points above itself
+- if the machine-IR projection is then fixed and trusted, a slow solved-phase projection points above itself
+- if the solved phase is then fixed and trusted, a slow lowering phase points above itself
+- and so on
+
+So the pattern gives you a recursive debugging method:
+
+1. validate the lowest machine first
+2. move one boundary up
+3. benchmark that boundary in isolation
+4. if it is slow, redesign the ASDL **above** it
+5. repeat
+
+This is a much stronger method than trying to optimize the whole stack at once.
+
+#### Why this belongs to the pattern rather than to benchmarking folklore
+
+This is not merely a nice engineering habit.
+It follows from the architecture itself.
+
+Because:
+
+- each phase consumes real knowledge
+- each boundary is memoized
+- identity is structural
+- later phases should narrow toward machines
+- and lower layers are validated before higher layers are trusted
+
+a slow boundary means the upstream language is still too expensive for the downstream machine to consume cleanly.
+
+That is exactly the kind of signal the pattern wants you to notice.
+
+#### Illustration: UI pipeline
+
+Suppose a UI render machine has already been designed and benchmarked successfully.
+You know the stable runner over spans/headers/instances/resources is good.
+
+Now imagine the projection feeding it is still slow.
+For example, `project_render_machine_ir` repeatedly rebuilds too much structure.
+
+At that point, the right question is not:
+
+- can the backend draw loop be micro-optimized again?
+
+The right questions are architectural:
+
+- why is this projection still discovering resource identity so late?
+- why are use-sites and resource specs still fused?
+- why is clip or draw-state sharing still unclear?
+- what facts should have been split in the ASDL above?
+
+Because the lower machine is already validated, the slow projection is telling you that the representation feeding it is wrong.
+
+#### Illustration: geometry solve
+
+The same logic applies one level up.
+
+Suppose geometry solve has been benchmarked and made good for its honest input language.
+Then the phase feeding geometry should be judged by how cheaply it can produce that language.
+
+If `lower_geometry` is slow, and the geometry solver below it is already trusted, then the diagnosis is no longer "maybe geometry solve is just expensive." The more useful diagnosis becomes:
+
+- is layout input still mixed with render/query facts?
+- are custom intrinsics still too opaque?
+- is the shared flat language too broad?
+- did we keep information bundled that the solver does not actually need?
+
+Again, the fix points upward into the ASDL.
+
+#### What this lets you do
+
+This recursive law gives a very practical implementation workflow:
+
+- benchmark the leaf first
+- then benchmark each higher boundary as soon as it exists
+- treat slowness as evidence of a bad upstream representation
+- redesign the ASDL tree above the offending boundary
+- only then continue implementing upward
+
+This is one of the cleanest ways to keep design, implementation, and performance aligned.
+
+It also explains why leaf-first design is so powerful in this pattern.
+It does not merely help you imagine the right terminal.
+It gives you a performance-proof workflow for discovering whether each higher phase is honest.
+
+#### The phrase to remember
+
+A useful way to summarize this is:
+
+> once a lower machine is trusted, a slow boundary above it is usually a type-shape failure above, not a backend failure below.
+
+Or even more compactly:
+
+> in a leaf-first compiler workflow, compile speed becomes execution speed recursively, one layer at a time.
+
+That is not a claim that stopwatch timings are literally identical.
+It is the stronger architectural claim that, after the lower machine has been validated, the next layer's performance directly measures how much unnecessary semantic work still remains in the language above it.
+
 ### Why LuaJIT-by-default follows from this model
 
 This whole performance model is what supports the LuaJIT default policy.
@@ -5188,10 +5518,12 @@ And the biggest performance wins often come first from:
 - narrower phases
 - better Unit granularity
 - better bake/live decisions
+- and redesigning the ASDL above the first slow boundary whose lower consumer is already trusted
 
 Only after those are right do low-level backend optimizations pay their full value.
 
 This is a healthier performance model than starting with isolated micro-benchmarks detached from the compilation architecture.
+It is also why the recursive benchmarking law matters: once a lower machine is trusted, the next slow boundary points upward into the language and phase design above it.
 
 ### What the pattern eliminates
 

@@ -1,48 +1,1053 @@
 return [=[
--- ui2 redesign ASDL sketch
---
+-- ============================================================================
+-- ui3 ASDL scaffold
+-- ----------------------------------------------------------------------------
 -- Purpose:
---   separate leaf-first machine-driven ASDL sketch file
---   not wired into the live schema yet
+--   new example line for the red-teamed lower architecture discovered during
+--   the ui2 redesign work.
 --
--- Working source of truth for the redesign process:
---   examples/ui2/leaf-first-redesign.md
+-- This file intentionally combines:
+--   - the stable top/source-side UI language from ui2
+--   - the new lower architecture from the redesign sketch
 --
--- Current target architecture being sketched here:
---
---   UiDecl
---     -> bind
---   UiBound
---     -> flatten
---   UiFlat
---     -> lower_geometry     -> UiGeometryInput
---     -> lower_render_facts -> UiRenderFacts
---     -> lower_query_facts  -> UiQueryFacts
---
---   UiGeometryInput
---     -> solve
---   UiGeometry
---
---   UiGeometry + UiRenderFacts
---     -> project_render_scene
---   UiRenderScene
---     -> schedule_render_machine_ir
---   UiRenderMachineIR
---     -> define_machine
---   UiMachine
---     -> Unit
---
---   UiGeometry + UiQueryFacts
---     -> project_query_scene
---   UiQueryScene
---     -> organize_query_machine_ir
---   UiQueryMachineIR
---     -> reducer/query execution
---
--- Notes:
---   - this file is intentionally separate from examples/ui2/ui2_asdl.lua
---   - use this file for redesign iteration before rewriting the live ASDL
---   - placeholders exist only to keep the sketch structurally explicit
+-- Status:
+--   schema/scaffold only
+--   no live implementations are installed yet
+--   custom-family portions remain intentionally provisional
+-- ============================================================================
+
+module UiCore {
+
+    -- ------------------------------------------------------------------------
+    -- Stable identities / references
+    -- ------------------------------------------------------------------------
+    ElementId     = (number value) unique
+    SemanticRef   = (number domain, number value) unique
+
+    FontRef       = (number value) unique
+    ImageRef      = (number value) unique
+    CursorRef     = (number value) unique
+
+    CommandRef    = (number value) unique
+    TextModelRef  = (number value) unique
+    ScrollRef     = (number value) unique
+
+    GlyphAtlasRef = (number value) unique
+
+    -- ------------------------------------------------------------------------
+    -- Geometry
+    -- ------------------------------------------------------------------------
+    Point = (
+        number x,
+        number y
+    ) unique
+
+    Size = (
+        number w,
+        number h
+    ) unique
+
+    Rect = (
+        number x,
+        number y,
+        number w,
+        number h
+    ) unique
+
+    Insets = (
+        number top,
+        number right,
+        number bottom,
+        number left
+    ) unique
+
+    Corners = (
+        number top_left,
+        number top_right,
+        number bottom_right,
+        number bottom_left
+    ) unique
+
+    Transform2D = (
+        number m11, number m12,
+        number m21, number m22,
+        number tx,  number ty
+    ) unique
+
+    Aspect = (
+        number width,
+        number height
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout vocabulary
+    -- ------------------------------------------------------------------------
+    Axis = Horizontal()
+         | Vertical()
+         | Both()
+
+    Flow = None()
+         | Row()
+         | Column()
+         | Stack()
+         | Wrap(Axis axis)
+         | Grid()
+
+    MainAlign = Start()
+              | Center()
+              | End()
+              | SpaceBetween()
+              | SpaceAround()
+              | SpaceEvenly()
+
+    CrossAlign = CrossStart()
+               | CrossCenter()
+               | CrossEnd()
+               | Stretch()
+
+    Overflow = Visible()
+             | Hidden()
+             | Scroll()
+             | OverflowAuto()
+
+    Measure = Auto()
+            | Px(number value)
+            | Percent(number value)
+            | Content()
+            | Flex(number weight)
+
+    EdgeMeasure = Unset()
+                | EdgePx(number value)
+                | EdgePercent(number value)
+
+    SizeSpec = (
+        Measure min,
+        Measure preferred,
+        Measure max
+    ) unique
+
+    Track = AutoTrack()
+          | PxTrack(number value)
+          | ContentTrack()
+          | FlexTrack(number weight)
+
+    AutoFlow = ByRow()
+             | ByColumn()
+
+    GridTemplate = (
+        Track* columns,
+        Track* rows,
+        number column_gap,
+        number row_gap,
+        AutoFlow auto_flow
+    ) unique
+
+    GridCell = (
+        number column_start,
+        number column_span,
+        number row_start,
+        number row_span
+    ) unique
+
+    AnchorX = Left()
+            | CenterX()
+            | Right()
+
+    AnchorY = Top()
+            | CenterY()
+            | Bottom()
+
+    Position = InFlow()
+             | Absolute(
+                   EdgeMeasure left,
+                   EdgeMeasure top,
+                   EdgeMeasure right,
+                   EdgeMeasure bottom
+               )
+             | Anchored(
+                   ElementId target,
+                   AnchorX self_x,
+                   AnchorY self_y,
+                   AnchorX target_x,
+                   AnchorY target_y,
+                   number dx,
+                   number dy
+               )
+
+    -- ------------------------------------------------------------------------
+    -- Paint vocabulary
+    -- ------------------------------------------------------------------------
+    Color = (
+        number r,
+        number g,
+        number b,
+        number a
+    ) unique
+
+    Stop = (
+        number t,
+        Color color
+    ) unique
+
+    Brush = Solid(Color color)
+          | LinearGradient(Stop* stops, Point from, Point to)
+          | RadialGradient(Stop* stops, Point center, number radius)
+
+    StrokeAlign = Inside()
+                | CenterStroke()
+                | Outside()
+
+    ShadowKind = DropShadow()
+               | InnerShadow()
+
+    BlendMode = BlendNormal()
+              | BlendMultiply()
+              | BlendScreen()
+              | BlendOverlay()
+              | BlendAdd()
+
+    -- ------------------------------------------------------------------------
+    -- Text vocabulary
+    -- ------------------------------------------------------------------------
+    FontWeight = Weight100()
+               | Weight200()
+               | Weight300()
+               | Weight400()
+               | Weight500()
+               | Weight600()
+               | Weight700()
+               | Weight800()
+               | Weight900()
+
+    FontSlant = Roman()
+              | Italic()
+              | Oblique()
+
+    TextWrap = NoWrap()
+             | WrapWord()
+             | WrapChar()
+
+    TextOverflow = ClipText()
+                 | Ellipsis()
+
+    TextAlign = TextStart()
+              | TextCenter()
+              | TextEnd()
+              | Justify()
+
+    TextValue = (
+        string value
+    ) unique
+
+    TextStyle = (
+        FontRef? font,
+        number? size_px,
+        FontWeight? weight,
+        FontSlant? slant,
+        number? letter_spacing_px,
+        number? line_height_px,
+        Color? color
+    ) unique
+
+    TextLayout = (
+        TextWrap wrap,
+        TextOverflow overflow,
+        TextAlign align,
+        number line_limit
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Image vocabulary
+    -- ------------------------------------------------------------------------
+    ImageFit = Fill()
+             | Contain()
+             | Cover()
+             | StretchImage()
+             | CenterImage()
+
+    ImageSampling = Nearest()
+                  | Linear()
+
+    ImageStyle = (
+        ImageFit fit,
+        ImageSampling sampling,
+        number opacity,
+        Corners corners
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Interaction vocabulary
+    -- ------------------------------------------------------------------------
+    PointerButton = Primary()
+                  | Middle()
+                  | Secondary()
+                  | Button4()
+                  | Button5()
+
+    KeyEvent = KeyDown()
+             | KeyUp()
+             | KeyRepeat()
+
+    KeyChord = (
+        boolean ctrl,
+        boolean alt,
+        boolean shift,
+        boolean meta,
+        number keycode
+    ) unique
+
+    Gesture = Tap()
+            | DoubleTap()
+            | LongPress()
+            | Drag()
+            | Pan()
+
+    FocusMode = TabFocus()
+              | ClickFocus()
+              | ProgrammaticFocus()
+              | TextFocus()
+
+    ToggleValue = Off()
+                | On()
+                | Mixed()
+
+    DragPayload = Opaque(number kind, number value)
+                | Semantic(SemanticRef ref)
+
+    DropPolicy = AcceptAny()
+               | AcceptKind(number kind)
+               | AcceptSemantic(number domain)
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility
+    -- ------------------------------------------------------------------------
+    AccessibleRole = AccNone()
+                   | AccGroup()
+                   | AccText()
+                   | AccImage()
+                   | AccButton()
+                   | AccToggle()
+                   | AccTextbox()
+                   | AccList()
+                   | AccListItem()
+                   | AccScrollArea()
+                   | AccDialog()
+                   | AccCustom(number kind)
+
+    -- ------------------------------------------------------------------------
+    -- Solved helpers for downstream phases
+    -- ------------------------------------------------------------------------
+    ClipShape = ClipRect(Rect rect)
+              | ClipRoundedRect(Rect rect, Corners corners)
+
+    HitShape = HitRect(Rect rect)
+             | HitRoundedRect(Rect rect, Corners corners)
+
+    ScrollExtent = (
+        number content_w,
+        number content_h,
+        number offset_x,
+        number offset_y
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Small role vocabulary
+    -- ------------------------------------------------------------------------
+    Role = View()
+         | TextRole()
+         | ImageRole()
+         | ScrollPort()
+         | ClipHost()
+         | InputField()
+         | ListHost()
+         | OverlayHost()
+         | CustomRole(number kind)
+}
+
+
+module UiAsset {
+
+    -- ------------------------------------------------------------------------
+    -- Explicit non-authored resource catalog.
+    -- These are compiler inputs, not user-authored UI structure and not
+    -- backend-global hidden state.
+    -- ------------------------------------------------------------------------
+
+    FontAsset = (
+        UiCore.FontRef ref,
+        string path
+    ) unique
+
+    ImageAsset = (
+        UiCore.ImageRef ref,
+        string path
+    ) unique
+
+    Catalog = (
+        UiCore.FontRef default_font,
+        FontAsset* fonts,
+        ImageAsset* images
+    ) unique
+}
+
+
+module UiDecl {
+
+    -- ------------------------------------------------------------------------
+    -- Canonical source phase.
+    -- App-specific widgets lower into this tree.
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        number version,
+        Root* roots,
+        Overlay* overlays
+    ) unique
+
+    Root = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root
+    ) unique
+
+    Overlay = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Element root,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer
+    ) unique
+
+    -- Element:
+    --   Canonical noun for UI.
+    --   App-specific widget concepts lower to Element trees.
+    Element = (
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        Flags flags,
+        Layout layout,
+        Paint paint,
+        Content content,
+        Behavior behavior,
+        Accessibility accessibility,
+        Element* children
+    ) unique
+
+    Flags = (
+        boolean visible,
+        boolean enabled
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout facet
+    -- ------------------------------------------------------------------------
+    Layout = (
+        UiCore.SizeSpec width,
+        UiCore.SizeSpec height,
+        UiCore.Position position,
+        UiCore.Flow flow,
+        UiCore.GridTemplate? grid,
+        UiCore.GridCell? cell,
+        UiCore.MainAlign main_align,
+        UiCore.CrossAlign cross_align,
+        UiCore.Insets padding,
+        UiCore.Insets margin,
+        number gap,
+        UiCore.Overflow overflow_x,
+        UiCore.Overflow overflow_y,
+        UiCore.Aspect? aspect
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Paint facet
+    -- ------------------------------------------------------------------------
+    -- Paint is declarative visual intent, not renderer commands.
+    Paint = (
+        PaintOp* ops
+    ) unique
+
+    PaintOp = Box(
+                  UiCore.Brush fill,
+                  UiCore.Brush? stroke,
+                  number stroke_width,
+                  UiCore.StrokeAlign align,
+                  UiCore.Corners corners
+              )
+            | Shadow(
+                  UiCore.Brush brush,
+                  number blur,
+                  number spread,
+                  number dx,
+                  number dy,
+                  UiCore.ShadowKind shadow_kind,
+                  UiCore.Corners corners
+              )
+            | Clip(
+                  UiCore.Corners corners
+              )
+            | Opacity(
+                  number value
+              )
+            | Transform(
+                  UiCore.Transform2D xform
+              )
+            | Blend(
+                  UiCore.BlendMode mode
+              )
+            | CustomPaint(
+                  number family,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Content facet
+    -- ------------------------------------------------------------------------
+    -- Content is distinct from decorative paint because layout, shaping,
+    -- accessibility, and editing all depend on it structurally.
+    Content = NoContent()
+            | Text(
+                  UiCore.TextValue value,
+                  UiCore.TextStyle style,
+                  UiCore.TextLayout layout
+              )
+            | Image(
+                  UiCore.ImageRef image,
+                  UiCore.ImageStyle style
+              )
+            | CustomContent(
+                  number family,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Behavior facet
+    -- ------------------------------------------------------------------------
+    -- Behavior is semantic interaction intent.
+    -- No callbacks, closures, runtime widget instances, or event buses.
+    Behavior = (
+        HitPolicy hit,
+        FocusPolicy focus,
+        PointerRule* pointer,
+        ScrollRule? scroll,
+        KeyRule* keys,
+        EditRule? edit,
+        DragDropRule* drag_drop
+    ) unique
+
+    HitPolicy = HitNone()
+              | HitSelf()
+              | HitSelfAndChildren()
+              | HitChildrenOnly()
+
+    FocusPolicy = NotFocusable()
+                | Focusable(
+                      UiCore.FocusMode mode,
+                      number? order
+                  )
+
+    PointerRule = Hover(
+                      UiCore.CursorRef? cursor,
+                      UiCore.CommandRef? enter,
+                      UiCore.CommandRef? leave
+                  )
+                | Press(
+                      UiCore.PointerButton button,
+                      number click_count,
+                      UiCore.CommandRef command
+                  )
+                | Toggle(
+                      UiCore.ToggleValue value,
+                      UiCore.PointerButton button,
+                      UiCore.CommandRef? command
+                  )
+                | Gesture(
+                      UiCore.Gesture gesture,
+                      UiCore.CommandRef command
+                  )
+
+    ScrollRule = (
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model
+    ) unique
+
+    KeyRule = (
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    EditRule = (
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed
+    ) unique
+
+    DragDropRule = Draggable(
+                       UiCore.DragPayload payload,
+                       UiCore.CommandRef? begin,
+                       UiCore.CommandRef? finish
+                   )
+                 | DropTarget(
+                       UiCore.DropPolicy policy,
+                       UiCore.CommandRef command
+                   )
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility facet
+    -- ------------------------------------------------------------------------
+    Accessibility = (
+        UiCore.AccessibleRole role,
+        string? label,
+        string? description,
+        boolean hidden,
+        number sort_priority
+    ) unique
+}
+
+
+module UiInput {
+
+    -- ------------------------------------------------------------------------
+    -- Canonical UI input language.
+    -- These are raw UI-facing events before routing.
+    -- ------------------------------------------------------------------------
+
+    Event = PointerMoved(
+                UiCore.Point position
+            )
+          | PointerPressed(
+                UiCore.Point position,
+                UiCore.PointerButton button
+            )
+          | PointerReleased(
+                UiCore.Point position,
+                UiCore.PointerButton button
+            )
+          | PointerExited()
+          | WheelScrolled(
+                UiCore.Point position,
+                number dx,
+                number dy
+            )
+          | KeyChanged(
+                UiCore.KeyEvent when,
+                UiCore.KeyChord chord
+            )
+          | TextEntered(
+                string text
+            )
+          | FocusChanged(
+                boolean focused
+            )
+          | ViewportResized(
+                UiCore.Size viewport
+            )
+}
+
+
+module UiSession {
+
+    -- ------------------------------------------------------------------------
+    -- Pure interaction state owned by the UI reducer.
+    -- This is not authored UI structure and not renderer state.
+    -- ------------------------------------------------------------------------
+
+    State = (
+        UiCore.Size viewport,
+        UiCore.Point pointer,
+        boolean pointer_in_bounds,
+        boolean window_focused,
+        PointerPress* pressed,
+        UiCore.ElementId? hovered,
+        UiCore.ElementId? focused,
+        UiCore.ElementId? captured,
+        DragSession? drag
+    ) unique
+
+    PointerPress = (
+        UiCore.PointerButton button,
+        UiCore.ElementId target,
+        number click_count
+    ) unique
+
+    DragSession = (
+        UiCore.ElementId source,
+        UiCore.DragPayload payload,
+        UiCore.Point origin
+    ) unique
+}
+
+
+module UiIntent {
+
+    -- ------------------------------------------------------------------------
+    -- Semantic UI outputs.
+    --
+    -- These are the interaction-language products emitted by the pure UI
+    -- reducer after consulting UiQuery's packed query plane. App/domain reducers
+    -- can translate these into app-domain events without having to inspect the
+    -- UI query structures directly.
+    -- ------------------------------------------------------------------------
+
+    CaretMotion = MoveLeft()
+                | MoveRight()
+                | MoveUp()
+                | MoveDown()
+                | MoveLineStart()
+                | MoveLineEnd()
+                | MoveWordLeft()
+                | MoveWordRight()
+
+    EditAction = InsertText(string text)
+               | Backspace()
+               | Delete()
+               | MoveCaret(CaretMotion motion, boolean extend)
+               | SelectAll()
+               | Submit()
+
+    Event = Command(
+                UiCore.CommandRef command,
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Toggle(
+                UiCore.CommandRef? command,
+                UiCore.ToggleValue value,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Scroll(
+                UiCore.ScrollRef? model,
+                number dx,
+                number dy,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Edit(
+                UiCore.TextModelRef model,
+                EditAction action,
+                UiCore.ElementId element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CommandRef? changed
+            )
+          | Focus(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref
+            )
+          | Hover(
+                UiCore.ElementId? element,
+                UiCore.SemanticRef? semantic_ref,
+                UiCore.CursorRef? cursor
+            )
+}
+
+
+module UiApply {
+
+    -- ------------------------------------------------------------------------
+    -- Pure UI reducer result.
+    --
+    -- The reducer consumes:
+    --   UiSession.State + UiQuery.Scene + UiInput.Event
+    --
+    -- and produces:
+    --   updated UiSession.State + emitted UiIntent.Event*
+    --
+    -- This keeps interaction as an explicit pure boundary rather than hiding
+    -- semantic dispatch inside backend helpers or callback-style code.
+    -- ------------------------------------------------------------------------
+
+    Result = (
+        UiSession.State session,
+        UiIntent.Event* intents
+    ) unique
+}
+
+
+module UiBound {
+
+    -- ------------------------------------------------------------------------
+    -- Bound / validated UI tree.
+    --
+    -- Meaning:
+    --   UiDecl -> bind -> UiBound
+    --
+    -- This phase keeps the authored tree shape but consumes:
+    --   - roots/overlays into canonical entries
+    --   - local semantic defaults / fallbacks
+    --   - ref and asset validation
+    --   - authored facet normalization into bound semantic forms
+    --
+    -- Important:
+    --   - still a tree
+    --   - not flattened yet
+    --   - not solver-facing yet
+    --   - not solved yet
+    -- ------------------------------------------------------------------------
+
+    Document = (
+        Entry* entries
+    ) unique
+
+    Entry = (
+        UiCore.ElementId id,
+        string? debug_name,
+        Node root,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Local state
+    -- ------------------------------------------------------------------------
+    Flags = (
+        boolean visible,
+        boolean enabled
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Layout facet
+    -- ------------------------------------------------------------------------
+    -- Layout is still semantic layout intent, but it is now bound:
+    --   - anchor targets are validated references
+    --   - authored irregularity is normalized
+    -- ------------------------------------------------------------------------
+    AnchorTarget = (
+        UiCore.ElementId target
+    ) unique
+
+    Position = InFlow()
+             | Absolute(
+                   UiCore.EdgeMeasure left,
+                   UiCore.EdgeMeasure top,
+                   UiCore.EdgeMeasure right,
+                   UiCore.EdgeMeasure bottom
+               )
+             | Anchored(
+                   AnchorTarget target,
+                   UiCore.AnchorX self_x,
+                   UiCore.AnchorY self_y,
+                   UiCore.AnchorX target_x,
+                   UiCore.AnchorY target_y,
+                   number dx,
+                   number dy
+               )
+
+    Layout = (
+        UiCore.SizeSpec width,
+        UiCore.SizeSpec height,
+        Position position,
+        UiCore.Flow flow,
+        UiCore.GridTemplate? grid,
+        UiCore.GridCell? cell,
+        UiCore.MainAlign main_align,
+        UiCore.CrossAlign cross_align,
+        UiCore.Insets padding,
+        UiCore.Insets margin,
+        number gap,
+        UiCore.Overflow overflow_x,
+        UiCore.Overflow overflow_y,
+        UiCore.Aspect? aspect
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Paint facet
+    -- ------------------------------------------------------------------------
+    -- Paint stays close to the authored language here. Binding does not yet
+    -- solve geometry or emit draw atoms; it only preserves local visual intent
+    -- in a bound phase-local vocabulary.
+    -- ------------------------------------------------------------------------
+    Paint = (
+        PaintOp* ops
+    ) unique
+
+    PaintOp = Box(
+                  UiCore.Brush fill,
+                  UiCore.Brush? stroke,
+                  number stroke_width,
+                  UiCore.StrokeAlign align,
+                  UiCore.Corners corners
+              )
+            | Shadow(
+                  UiCore.Brush brush,
+                  number blur,
+                  number spread,
+                  number dx,
+                  number dy,
+                  UiCore.ShadowKind shadow_kind,
+                  UiCore.Corners corners
+              )
+            | Clip(
+                  UiCore.Corners corners
+              )
+            | Opacity(
+                  number value
+              )
+            | Transform(
+                  UiCore.Transform2D xform
+              )
+            | Blend(
+                  UiCore.BlendMode mode
+              )
+            | CustomPaint(
+                  number family,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Content facet
+    -- ------------------------------------------------------------------------
+    -- Content is normalized into bound semantic forms.
+    --
+    -- The key binding move here is that text styling is made explicit:
+    --   - resolved font ref is mandatory
+    --   - optional source style fields become concrete values
+    --   - authored text layout fields remain explicit but no longer optional
+    --
+    -- Text is still not measured or shaped here. That happens later.
+    -- ------------------------------------------------------------------------
+    BoundText = (
+        UiCore.TextValue value,
+        UiCore.FontRef font,
+        number size_px,
+        UiCore.FontWeight weight,
+        UiCore.FontSlant slant,
+        number letter_spacing_px,
+        number line_height_px,
+        UiCore.Color color,
+        UiCore.TextWrap wrap,
+        UiCore.TextOverflow overflow,
+        UiCore.TextAlign align,
+        number line_limit
+    ) unique
+
+    BoundImage = (
+        UiCore.ImageRef image,
+        UiCore.ImageStyle style
+    ) unique
+
+    Content = NoContent()
+            | Text(BoundText text)
+            | Image(BoundImage image)
+            | CustomContent(
+                  number family,
+                  number payload
+              )
+
+    -- ------------------------------------------------------------------------
+    -- Behavior facet
+    -- ------------------------------------------------------------------------
+    -- Behavior is still semantic interaction intent, but in bound form:
+    -- refs are validated, defaults are canonicalized, and later phases do not
+    -- need to reinterpret UiDecl.Behavior directly.
+    -- ------------------------------------------------------------------------
+    HitPolicy = HitNone()
+              | HitSelf()
+              | HitSelfAndChildren()
+              | HitChildrenOnly()
+
+    FocusPolicy = NotFocusable()
+                | Focusable(
+                      UiCore.FocusMode mode,
+                      number? order
+                  )
+
+    PointerRule = Hover(
+                      UiCore.CursorRef? cursor,
+                      UiCore.CommandRef? enter,
+                      UiCore.CommandRef? leave
+                  )
+                | Press(
+                      UiCore.PointerButton button,
+                      number click_count,
+                      UiCore.CommandRef command
+                  )
+                | Toggle(
+                      UiCore.ToggleValue value,
+                      UiCore.PointerButton button,
+                      UiCore.CommandRef? command
+                  )
+                | Gesture(
+                      UiCore.Gesture gesture,
+                      UiCore.CommandRef command
+                  )
+
+    ScrollRule = (
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model
+    ) unique
+
+    KeyRule = (
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    EditRule = (
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed
+    ) unique
+
+    DragDropRule = Draggable(
+                       UiCore.DragPayload payload,
+                       UiCore.CommandRef? begin,
+                       UiCore.CommandRef? finish
+                   )
+                 | DropTarget(
+                       UiCore.DropPolicy policy,
+                       UiCore.CommandRef command
+                   )
+
+    Behavior = (
+        HitPolicy hit,
+        FocusPolicy focus,
+        PointerRule* pointer,
+        ScrollRule? scroll,
+        KeyRule* keys,
+        EditRule? edit,
+        DragDropRule* drag_drop
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Accessibility facet
+    -- ------------------------------------------------------------------------
+    -- Binding consumes the authored hidden flag into an explicit sum type.
+    -- Later phases can now distinguish clearly between:
+    --   - no accessibility participation
+    --   - exposed accessibility semantics
+    -- ------------------------------------------------------------------------
+    Accessibility = Hidden()
+                  | Exposed(
+                        UiCore.AccessibleRole role,
+                        string? label,
+                        string? description,
+                        number sort_priority
+                    )
+
+    Node = (
+        UiCore.ElementId id,
+        UiCore.SemanticRef? semantic_ref,
+        string? debug_name,
+        UiCore.Role role,
+        Flags flags,
+        Layout layout,
+        Paint paint,
+        Content content,
+        Behavior behavior,
+        Accessibility accessibility,
+        Node* children
+    ) unique
+}
+
 
 module UiFlatShape {
     -- --------------------------------------------------------------------
@@ -79,6 +1084,7 @@ module UiFlatShape {
         UiCore.Role role
     ) unique
 }
+
 
 module UiFlat {
     -- --------------------------------------------------------------------
@@ -352,6 +1358,7 @@ module UiFlat {
                           )
 }
 
+
 module UiGeometryInput {
     -- --------------------------------------------------------------------
     -- Shared geometry-solver input language.
@@ -488,6 +1495,7 @@ module UiGeometryInput {
     ) unique
 }
 
+
 module UiGeometry {
     -- --------------------------------------------------------------------
     -- Shared solved geometry coupling point.
@@ -550,6 +1558,7 @@ module UiGeometry {
     GeometryNode = Excluded()
                  | Placed(PlacedNode node)
 }
+
 
 module UiRenderFacts {
     -- --------------------------------------------------------------------
@@ -662,6 +1671,7 @@ module UiRenderFacts {
             | Custom(CustomContent custom)
 }
 
+
 module UiRenderScene {
     -- --------------------------------------------------------------------
     -- Concrete render occurrence scene.
@@ -759,111 +1769,6 @@ module UiRenderScene {
                        )
 }
 
-module UiQueryFacts {
-    -- --------------------------------------------------------------------
-    -- Query-specific lowered facts carried alongside solved geometry.
-    --
-    -- Meaning:
-    --   UiFlat -> lower_query_facts -> UiQueryFacts
-    --
-    -- Design rule:
-    --   This module contains query/accessibility facts that geometry does not
-    --   solve but later query machine-ir projection still needs.
-    -- --------------------------------------------------------------------
-
-    Scene = (
-        Region* regions
-    ) unique
-
-    -- Alignment invariant:
-    --   `node_facts[i]` describes the same region-local flat node as the shared
-    --   node/header index `i` in UiFlat / UiGeometryInput / UiGeometry.
-    Region = (
-        UiFlatShape.RegionHeader header,
-        number z_index,
-        boolean modal,
-        boolean consumes_pointer,
-        Fact* node_facts
-    ) unique
-
-    Hit = NoHit()
-        | SelfHit()
-        | SelfAndChildrenHit()
-        | ChildrenOnlyHit()
-
-    Focus = Focusable(
-                  UiCore.FocusMode mode,
-                  number? order
-              )
-
-    PointerBinding = HoverBinding(
-                         UiCore.CursorRef? cursor,
-                         UiCore.CommandRef? enter,
-                         UiCore.CommandRef? leave
-                     )
-                   | PressBinding(
-                         UiCore.PointerButton button,
-                         number click_count,
-                         UiCore.CommandRef command
-                     )
-                   | ToggleBinding(
-                         UiCore.ToggleValue value,
-                         UiCore.PointerButton button,
-                         UiCore.CommandRef? command
-                     )
-                   | GestureBinding(
-                         UiCore.Gesture gesture,
-                         UiCore.CommandRef command
-                     )
-
-    Scroll = (
-        UiCore.Axis axis,
-        UiCore.ScrollRef? model
-    ) unique
-
-    Key = (
-        UiCore.KeyChord chord,
-        UiCore.KeyEvent when,
-        UiCore.CommandRef command,
-        boolean global
-    ) unique
-
-    Edit = (
-        UiCore.TextModelRef model,
-        boolean multiline,
-        boolean read_only,
-        UiCore.CommandRef? changed
-    ) unique
-
-    DragDropBinding = DraggableBinding(
-                          UiCore.DragPayload payload,
-                          UiCore.CommandRef? begin,
-                          UiCore.CommandRef? finish
-                      )
-                    | DropTargetBinding(
-                          UiCore.DropPolicy policy,
-                          UiCore.CommandRef command
-                      )
-
-    Accessibility = NoAccessibility()
-                  | Exposed(
-                        UiCore.AccessibleRole role,
-                        string? label,
-                        string? description,
-                        number sort_priority
-                    )
-
-    Fact = (
-        Hit hit,
-        Focus? focus,
-        PointerBinding* pointer,
-        Scroll? scroll,
-        Key* keys,
-        Edit? edit,
-        DragDropBinding* drag_drop,
-        Accessibility accessibility
-    ) unique
-}
 
 module UiRenderMachineIR {
     -- --------------------------------------------------------------------
@@ -1086,6 +1991,114 @@ module UiRenderMachineIR {
     InstallationStateFamily = CapacityTracking()
 }
 
+
+module UiQueryFacts {
+    -- --------------------------------------------------------------------
+    -- Query-specific lowered facts carried alongside solved geometry.
+    --
+    -- Meaning:
+    --   UiFlat -> lower_query_facts -> UiQueryFacts
+    --
+    -- Design rule:
+    --   This module contains query/accessibility facts that geometry does not
+    --   solve but later query machine-ir projection still needs.
+    -- --------------------------------------------------------------------
+
+    Scene = (
+        Region* regions
+    ) unique
+
+    -- Alignment invariant:
+    --   `node_facts[i]` describes the same region-local flat node as the shared
+    --   node/header index `i` in UiFlat / UiGeometryInput / UiGeometry.
+    Region = (
+        UiFlatShape.RegionHeader header,
+        number z_index,
+        boolean modal,
+        boolean consumes_pointer,
+        Fact* node_facts
+    ) unique
+
+    Hit = NoHit()
+        | SelfHit()
+        | SelfAndChildrenHit()
+        | ChildrenOnlyHit()
+
+    Focus = Focusable(
+                  UiCore.FocusMode mode,
+                  number? order
+              )
+
+    PointerBinding = HoverBinding(
+                         UiCore.CursorRef? cursor,
+                         UiCore.CommandRef? enter,
+                         UiCore.CommandRef? leave
+                     )
+                   | PressBinding(
+                         UiCore.PointerButton button,
+                         number click_count,
+                         UiCore.CommandRef command
+                     )
+                   | ToggleBinding(
+                         UiCore.ToggleValue value,
+                         UiCore.PointerButton button,
+                         UiCore.CommandRef? command
+                     )
+                   | GestureBinding(
+                         UiCore.Gesture gesture,
+                         UiCore.CommandRef command
+                     )
+
+    Scroll = (
+        UiCore.Axis axis,
+        UiCore.ScrollRef? model
+    ) unique
+
+    Key = (
+        UiCore.KeyChord chord,
+        UiCore.KeyEvent when,
+        UiCore.CommandRef command,
+        boolean global
+    ) unique
+
+    Edit = (
+        UiCore.TextModelRef model,
+        boolean multiline,
+        boolean read_only,
+        UiCore.CommandRef? changed
+    ) unique
+
+    DragDropBinding = DraggableBinding(
+                          UiCore.DragPayload payload,
+                          UiCore.CommandRef? begin,
+                          UiCore.CommandRef? finish
+                      )
+                    | DropTargetBinding(
+                          UiCore.DropPolicy policy,
+                          UiCore.CommandRef command
+                      )
+
+    Accessibility = NoAccessibility()
+                  | Exposed(
+                        UiCore.AccessibleRole role,
+                        string? label,
+                        string? description,
+                        number sort_priority
+                    )
+
+    Fact = (
+        Hit hit,
+        Focus? focus,
+        PointerBinding* pointer,
+        Scroll? scroll,
+        Key* keys,
+        Edit? edit,
+        DragDropBinding* drag_drop,
+        Accessibility accessibility
+    ) unique
+}
+
+
 module UiQueryScene {
     -- --------------------------------------------------------------------
     -- Concrete query occurrence scene.
@@ -1232,6 +2245,7 @@ module UiQueryScene {
                           UiCore.CommandRef command
                       )
 }
+
 
 module UiQueryMachineIR {
     -- --------------------------------------------------------------------
@@ -1429,6 +2443,7 @@ module UiQueryMachineIR {
     -- machine state is required, add it only then.
 }
 
+
 module UiMachine {
     -- --------------------------------------------------------------------
     -- Canonical machine layer.
@@ -1485,4 +2500,5 @@ module UiMachine {
     -- in code if the reducer can consume UiQueryMachineIR directly. So we do
     -- not freeze a query machine record here yet.
 }
+
 ]=]
