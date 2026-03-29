@@ -814,6 +814,47 @@ When working in this repository specifically:
 - When adding examples or helpers, reinforce the pattern rather than diluting it.
 - If you must extend the framework, do it in the same spirit: small, compositional, reflective, no new DSL unless absolutely forced.
 
+### 12.1 Backend policy
+
+This repository is now explicitly backend-neutral in architecture, but not backend-loose in implementation.
+
+Default policy:
+
+- pure compiler/reducer/projection phases should usually live in ordinary `.lua` files
+- LuaJIT is the default backend on JIT-native platforms
+- Terra is the opt-in strong backend for explicit staging, ABI-sensitive work, SIMD, LLVM-optimized kernels, and similar native-specialized leaves
+
+That does **not** mean LuaJIT is the permissive dynamic backend.
+
+### 12.2 LuaJIT leaf policy
+
+LuaJIT leaves must satisfy the same architectural honesty as Terra leaves.
+
+Required:
+
+- same `Unit { fn, state_t }` shape as Terra
+- monomorphic hot `fn`
+- `state_t` realized as typed FFI/cdata-backed layout
+- live payload consumed by the leaf realized as typed FFI/cdata-backed layout
+- direct indexed loops / fixed field access in hot execution paths
+- rich semantic structure fully lowered before execution
+
+Forbidden in production LuaJIT leaves:
+
+- opaque Lua tables as kernel state
+- opaque Lua tables as live payload consumed by compiled functions
+- shape-varying runtime object graphs
+- string-tag dispatch in hot loops
+- recursive interpretation of source trees at execution time
+
+The rule is strict:
+
+> no opaque tables anywhere in the designed system.
+
+Pure phases may work over ASDL-defined typed values and typed lists. Backend leaves must work over backend-native typed layouts.
+
+If a LuaJIT leaf wants general table bags, missing-field checks, tag strings, or interpreter-style tree walking, the lowering is incomplete. Fix the ASDL or insert the missing phase.
+
 ---
 
 ## 13. The core mental model to keep at all times

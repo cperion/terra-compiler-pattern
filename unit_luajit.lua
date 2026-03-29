@@ -1,18 +1,25 @@
 -- unit_luajit.lua
 --
--- LuaJIT backend for the Terra Compiler Pattern.
+-- LuaJIT backend for the compiler pattern.
 --
 -- Shared pure helpers live in unit_core.lua.
 -- This module adds the LuaJIT-specific terminal/runtime layer:
---   - state layouts backed by Lua tables or FFI cdata
---   - Unit construction for fn(state, ...)
+--   - FFI/cdata-backed typed state layouts
+--   - monomorphic Unit construction for fn(state, ...)
 --   - structural composition
 --   - hot-swap slots
 --   - app loop wiring
+--
+-- Important policy:
+--   LuaJIT is not the "dynamic tables" backend. The intended production leaf
+--   contract is the same Unit shape as Terra: Unit { fn, state_t }, with
+--   state_t realized as FFI/cdata-backed typed layout. Pure phases stay typed
+--   and structural above this layer.
 
 local U = require("unit_core").new()
 
 local has_ffi, ffi = pcall(require, "ffi")
+local Schema = require("unit_schema")
 local load_fn = loadstring or load
 local setfenv_fn = setfenv
 
@@ -51,6 +58,9 @@ function U.state(alloc, release, kind)
     }
 end
 
+-- Debug/scaffolding helper only.
+-- Production backend leaves should use U.state_ffi(...) so compiled functions
+-- run over typed FFI layouts rather than opaque Lua tables.
 function U.state_table(init, release)
     return U.state(function()
         local state = {}
@@ -59,7 +69,7 @@ function U.state_table(init, release)
             if replacement ~= nil then state = replacement end
         end
         return state
-    end, release, "table")
+    end, release, "table-debug")
 end
 
 function U.state_ffi(ctype, opts)
@@ -403,16 +413,6 @@ function U.app(config)
 end
 
 
--- ═══════════════════════════════════════════════════════════════
--- INTENTIONAL NON-PORTS
--- ═══════════════════════════════════════════════════════════════
-
-function U.inspect()
-    error("unit_luajit.lua: U.inspect is not ported yet; use unit.t for schema inspection helpers", 2)
-end
-
-function U.inspect_from(...)
-    return U.inspect(...)
-end
+Schema.install(U)
 
 return U

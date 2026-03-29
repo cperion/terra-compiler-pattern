@@ -69,12 +69,24 @@ local compile_metrics = {
     { key = "compile_gain_avg_ns", label = "gain" },
     { key = "compile_biquad_avg_ns", label = "biquad" },
     { key = "compile_chain_avg_ns", label = "chain" },
+    { key = "compile_gain_chain_avg_ns", label = "gain-chain" },
+}
+
+local incremental_compile_metrics = {
+    { key = "compile_chain_hit_avg_ns", label = "chain memo hit" },
+    { key = "compile_chain_edit_avg_ns", label = "chain one-edit" },
 }
 
 local exec_metrics = {
     { key = "exec_gain_ns_per_sample", label = "gain" },
     { key = "exec_biquad_ns_per_sample", label = "biquad" },
     { key = "exec_chain_ns_per_sample", label = "chain" },
+    { key = "exec_gain_chain_ns_per_sample", label = "gain-chain" },
+}
+
+local exec_small_metrics = {
+    { key = "exec_chain_small_ns_per_sample", label = "chain small" },
+    { key = "exec_gain_chain_small_ns_per_sample", label = "gain-chain small" },
 }
 
 local function gather_values(trials, key)
@@ -91,6 +103,18 @@ local function scenario_config(trials)
         return metrics
     end
     return {}
+end
+
+local function metric_present(scenario, key)
+    local terra_trials = data[scenario].terra or {}
+    local lj_trials = data[scenario].luajit or {}
+    for _, metrics in pairs(terra_trials) do
+        if metrics[key] ~= nil then return true end
+    end
+    for _, metrics in pairs(lj_trials) do
+        if metrics[key] ~= nil then return true end
+    end
+    return false
 end
 
 io.write("# Backend benchmark matrix\n\n")
@@ -121,41 +145,94 @@ for _, scenario in ipairs(scenarios) do
     io.write("| Kernel | Terra median | Terra p95 | LuaJIT median | LuaJIT p95 | Terra/LJ |\n")
     io.write("|---|---:|---:|---:|---:|---:|\n")
     for _, metric in ipairs(compile_metrics) do
-        local terra_xs = gather_values(data[scenario].terra, metric.key)
-        local lj_xs = gather_values(data[scenario].luajit, metric.key)
-        local terra_med = median(terra_xs) / 1000.0
-        local terra_p95 = percentile(terra_xs, 0.95) / 1000.0
-        local lj_med = median(lj_xs) / 1000.0
-        local lj_p95 = percentile(lj_xs, 0.95) / 1000.0
-        io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
-            metric.label,
-            terra_med,
-            terra_p95,
-            lj_med,
-            lj_p95,
-            ratio(terra_med, lj_med)))
+        if metric_present(scenario, metric.key) then
+            local terra_xs = gather_values(data[scenario].terra, metric.key)
+            local lj_xs = gather_values(data[scenario].luajit, metric.key)
+            local terra_med = median(terra_xs) / 1000.0
+            local terra_p95 = percentile(terra_xs, 0.95) / 1000.0
+            local lj_med = median(lj_xs) / 1000.0
+            local lj_p95 = percentile(lj_xs, 0.95) / 1000.0
+            io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
+                metric.label,
+                terra_med,
+                terra_p95,
+                lj_med,
+                lj_p95,
+                ratio(terra_med, lj_med)))
+        end
     end
     io.write("\n")
+
+    if metric_present(scenario, "compile_chain_hit_avg_ns") then
+        io.write("### Compile reuse / incremental cost (us)\n\n")
+        io.write("| Metric | Terra median | Terra p95 | LuaJIT median | LuaJIT p95 | Terra/LJ |\n")
+        io.write("|---|---:|---:|---:|---:|---:|\n")
+        for _, metric in ipairs(incremental_compile_metrics) do
+            if metric_present(scenario, metric.key) then
+                local terra_xs = gather_values(data[scenario].terra, metric.key)
+                local lj_xs = gather_values(data[scenario].luajit, metric.key)
+                local terra_med = median(terra_xs) / 1000.0
+                local terra_p95 = percentile(terra_xs, 0.95) / 1000.0
+                local lj_med = median(lj_xs) / 1000.0
+                local lj_p95 = percentile(lj_xs, 0.95) / 1000.0
+                io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
+                    metric.label,
+                    terra_med,
+                    terra_p95,
+                    lj_med,
+                    lj_p95,
+                    ratio(terra_med, lj_med)))
+            end
+        end
+        io.write("\n")
+    end
 
     io.write("### Execution cost (steady-state net, ns/sample)\n\n")
     io.write("| Kernel | Terra median | Terra p95 | LuaJIT median | LuaJIT p95 | LJ/Terra |\n")
     io.write("|---|---:|---:|---:|---:|---:|\n")
     for _, metric in ipairs(exec_metrics) do
-        local terra_xs = gather_values(data[scenario].terra, metric.key)
-        local lj_xs = gather_values(data[scenario].luajit, metric.key)
-        local terra_med = median(terra_xs)
-        local terra_p95 = percentile(terra_xs, 0.95)
-        local lj_med = median(lj_xs)
-        local lj_p95 = percentile(lj_xs, 0.95)
-        io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
-            metric.label,
-            terra_med,
-            terra_p95,
-            lj_med,
-            lj_p95,
-            ratio(lj_med, terra_med)))
+        if metric_present(scenario, metric.key) then
+            local terra_xs = gather_values(data[scenario].terra, metric.key)
+            local lj_xs = gather_values(data[scenario].luajit, metric.key)
+            local terra_med = median(terra_xs)
+            local terra_p95 = percentile(terra_xs, 0.95)
+            local lj_med = median(lj_xs)
+            local lj_p95 = percentile(lj_xs, 0.95)
+            io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
+                metric.label,
+                terra_med,
+                terra_p95,
+                lj_med,
+                lj_p95,
+                ratio(lj_med, terra_med)))
+        end
     end
     io.write("\n")
+
+    if metric_present(scenario, "exec_chain_small_ns_per_sample") then
+        local cfg = scenario_config(data[scenario].terra or {})
+        io.write(string.format("### Small-block execution (ns/sample, block=%d)\n\n", cfg.small_block or 0))
+        io.write("| Kernel | Terra median | Terra p95 | LuaJIT median | LuaJIT p95 | LJ/Terra |\n")
+        io.write("|---|---:|---:|---:|---:|---:|\n")
+        for _, metric in ipairs(exec_small_metrics) do
+            if metric_present(scenario, metric.key) then
+                local terra_xs = gather_values(data[scenario].terra, metric.key)
+                local lj_xs = gather_values(data[scenario].luajit, metric.key)
+                local terra_med = median(terra_xs)
+                local terra_p95 = percentile(terra_xs, 0.95)
+                local lj_med = median(lj_xs)
+                local lj_p95 = percentile(lj_xs, 0.95)
+                io.write(string.format("| %s | %.3f | %.3f | %.3f | %.3f | %.2fx |\n",
+                    metric.label,
+                    terra_med,
+                    terra_p95,
+                    lj_med,
+                    lj_p95,
+                    ratio(lj_med, terra_med)))
+            end
+        end
+        io.write("\n")
+    end
 end
 
 io.write("## Interpretation\n\n")

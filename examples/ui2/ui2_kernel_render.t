@@ -1,12 +1,15 @@
 local U = require("unit")
 local F = require("fun")
 local Assets = require("examples.ui.ui_asset_resolve")
+local ImageData = require("examples.ui.backend_image_sdl")
 local SdlGl = require("examples.ui.backend_sdl_gl")
 local Text = require("examples.ui.backend_text_sdl_ttf")
+local Std = terralib.includec("stdlib.h")
 
 local int32 = terralib.types.int32
 local uint32 = terralib.types.uint32
 local double = terralib.types.double
+local uintptr = terralib.types.uint64
 
 local function L(xs)
     return terralib.newlist(xs or {})
@@ -17,13 +20,13 @@ local function ptr_t(t)
 end
 
 -- ============================================================================
--- UiKernel.Spec:compile / UiKernel.Payload:materialize
+-- UiMachine.Gen:compile / UiMachine.Render:materialize
 -- ----------------------------------------------------------------------------
--- This file implements the final two ui2 boundaries.
+-- This file implements backend realization of the explicit ui2 machine layer.
 --
 -- Boundary meanings:
---   UiKernel.Spec:compile(target) -> Unit
---   UiKernel.Payload:materialize(target, assets, state) -> keep
+--   UiMachine.Gen:compile(target) -> Unit
+--   UiMachine.Render:materialize(target, assets, state) -> keep
 --
 -- Why compile/materialize are split:
 --   compile answers:
@@ -33,7 +36,7 @@ end
 --     "what live payload do we load into that ABI right now?"
 --
 -- What compile consumes:
---   - UiKernel.Spec
+--   - UiMachine.Gen
 --   - explicit render target contract
 --
 -- What compile produces:
@@ -41,7 +44,7 @@ end
 --   - generic init/release hooks for emptying scene state
 --
 -- What materialize consumes:
---   - UiKernel.Payload
+--   - UiMachine.Render.param
 --   - explicit target
 --   - explicit asset catalog
 --   - one allocated state_t instance
@@ -101,24 +104,10 @@ local function stateful_unit(fn, state_t, init, release)
     return unit
 end
 
-local function clear_scene_state(state)
-    state.batch_count = 0
-    state.batches = nil
-    state.box_count = 0
-    state.boxes = nil
-    state.shadow_count = 0
-    state.shadows = nil
-    state.text_run_count = 0
-    state.text_runs = nil
-    state.image_count = 0
-    state.images = nil
-    state.custom_count = 0
-    state.customs = nil
-end
 
 local function normalize_target(target)
     if not target then
-        error("UiKernel.Spec:compile: target is required", 3)
+        error("UiMachine.Render: target is required", 3)
     end
 
     if type(target.runtime_t) == "function" and type(target.headers) == "function" then
@@ -129,11 +118,11 @@ local function normalize_target(target)
     end
 
     if type(target) ~= "table" or type(target.backend) ~= "table" then
-        error("UiKernel.Spec:compile: target must be a backend module or { backend = ..., custom = ... }", 3)
+        error("UiMachine.Render: target must be a backend module or { backend = ..., custom = ... }", 3)
     end
 
     if type(target.backend.runtime_t) ~= "function" or type(target.backend.headers) ~= "function" then
-        error("UiKernel.Spec:compile: target.backend must provide runtime_t() and headers()", 3)
+        error("UiMachine.Render: target.backend must provide runtime_t() and headers()", 3)
     end
 
     return {
@@ -210,6 +199,10 @@ BoxItemState.entries:insert({ field = "stroke_g", type = double })
 BoxItemState.entries:insert({ field = "stroke_b", type = double })
 BoxItemState.entries:insert({ field = "stroke_a", type = double })
 BoxItemState.entries:insert({ field = "stroke_width", type = double })
+BoxItemState.entries:insert({ field = "tl", type = double })
+BoxItemState.entries:insert({ field = "tr", type = double })
+BoxItemState.entries:insert({ field = "br", type = double })
+BoxItemState.entries:insert({ field = "bl", type = double })
 
 local ShadowItemState = terralib.types.newstruct("Ui2KernelShadowItemState")
 ShadowItemState.entries:insert({ field = "x", type = double })
@@ -225,8 +218,13 @@ ShadowItemState.entries:insert({ field = "spread", type = double })
 ShadowItemState.entries:insert({ field = "dx", type = double })
 ShadowItemState.entries:insert({ field = "dy", type = double })
 ShadowItemState.entries:insert({ field = "kind", type = int32 })
+ShadowItemState.entries:insert({ field = "tl", type = double })
+ShadowItemState.entries:insert({ field = "tr", type = double })
+ShadowItemState.entries:insert({ field = "br", type = double })
+ShadowItemState.entries:insert({ field = "bl", type = double })
 
 local TextRunState = terralib.types.newstruct("Ui2KernelTextRunState")
+TextRunState.entries:insert({ field = "cache_key", type = uint32 })
 TextRunState.entries:insert({ field = "tex_id", type = uint32 })
 TextRunState.entries:insert({ field = "x1", type = double })
 TextRunState.entries:insert({ field = "y1", type = double })
@@ -234,12 +232,17 @@ TextRunState.entries:insert({ field = "x2", type = double })
 TextRunState.entries:insert({ field = "y2", type = double })
 
 local ImageItemState = terralib.types.newstruct("Ui2KernelImageItemState")
+ImageItemState.entries:insert({ field = "tex_id", type = uint32 })
 ImageItemState.entries:insert({ field = "x", type = double })
 ImageItemState.entries:insert({ field = "y", type = double })
 ImageItemState.entries:insert({ field = "w", type = double })
 ImageItemState.entries:insert({ field = "h", type = double })
 ImageItemState.entries:insert({ field = "opacity", type = double })
 ImageItemState.entries:insert({ field = "sampling", type = int32 })
+ImageItemState.entries:insert({ field = "tl", type = double })
+ImageItemState.entries:insert({ field = "tr", type = double })
+ImageItemState.entries:insert({ field = "br", type = double })
+ImageItemState.entries:insert({ field = "bl", type = double })
 
 local CustomItemState = terralib.types.newstruct("Ui2KernelCustomItemState")
 CustomItemState.entries:insert({ field = "payload", type = double })
@@ -272,11 +275,56 @@ SceneState.entries:insert({ field = "boxes", type = ptr_t(BoxItemState) })
 SceneState.entries:insert({ field = "shadow_count", type = int32 })
 SceneState.entries:insert({ field = "shadows", type = ptr_t(ShadowItemState) })
 SceneState.entries:insert({ field = "text_run_count", type = int32 })
+SceneState.entries:insert({ field = "text_run_capacity", type = int32 })
 SceneState.entries:insert({ field = "text_runs", type = ptr_t(TextRunState) })
 SceneState.entries:insert({ field = "image_count", type = int32 })
 SceneState.entries:insert({ field = "images", type = ptr_t(ImageItemState) })
 SceneState.entries:insert({ field = "custom_count", type = int32 })
 SceneState.entries:insert({ field = "customs", type = ptr_t(CustomItemState) })
+
+local init_scene_state = terra(state : &SceneState)
+    state.text_run_capacity = 0
+    state.text_runs = nil
+    state.batch_count = 0
+    state.batches = nil
+    state.box_count = 0
+    state.boxes = nil
+    state.shadow_count = 0
+    state.shadows = nil
+    state.text_run_count = 0
+    state.image_count = 0
+    state.images = nil
+    state.custom_count = 0
+    state.customs = nil
+end
+init_scene_state:compile()
+
+local clear_scene_state = terra(state : &SceneState)
+    state.batch_count = 0
+    state.batches = nil
+    state.box_count = 0
+    state.boxes = nil
+    state.shadow_count = 0
+    state.shadows = nil
+    state.text_run_count = 0
+    if state.text_run_capacity == 0 then
+        state.text_runs = nil
+    end
+    state.image_count = 0
+    state.images = nil
+    state.custom_count = 0
+    state.customs = nil
+end
+clear_scene_state:compile()
+
+local release_scene_state = terra(state : &SceneState)
+    if state.text_runs ~= nil then
+        Std.free(state.text_runs)
+    end
+    state.text_run_capacity = 0
+    clear_scene_state(state)
+end
+release_scene_state:compile()
 
 local CMD_BOX = 1
 local CMD_SHADOW = 2
@@ -287,13 +335,21 @@ local CMD_CUSTOM = 5
 local SHADOW_DROP = 1
 local SHADOW_INNER = 2
 
+local QUARTER_ARC = {
+    { 0.0, -1.0 },
+    { 0.38268343236509, -0.92387953251129 },
+    { 0.70710678118655, -0.70710678118655 },
+    { 0.92387953251129, -0.38268343236509 },
+    { 1.0, 0.0 },
+}
+
 local function custom_handlers_for(target, spec)
     local target_custom = target.custom or {}
 
     return F.iter(spec.custom_families):map(function(family)
         local fn = target_custom[family.family]
         if fn == nil then
-            error(("UiKernel.Spec:compile: missing target custom handler for family %s")
+            error(("UiMachine.Render: missing target custom handler for family %s")
                 :format(tostring(family.family)), 3)
         end
         return {
@@ -388,6 +444,177 @@ local function build_scene_runner(target, spec)
     end
     draw_stroke_loop_rt:compile()
 
+    local draw_rounded_solid_rt = terra(rt : &Runtime, x : double, y : double, w : double, h : double, tl : double, tr : double, br : double, bl : double, r : double, g : double, b : double, a : double)
+        var limit = w
+        if h < limit then limit = h end
+        limit = limit * 0.5
+        if tl < 0 then tl = 0 elseif tl > limit then tl = limit end
+        if tr < 0 then tr = 0 elseif tr > limit then tr = limit end
+        if br < 0 then br = 0 elseif br > limit then br = limit end
+        if bl < 0 then bl = 0 elseif bl > limit then bl = limit end
+
+        C.glColor4d(r, g, b, a * rt.opacity)
+        C.glBegin(C.GL_POLYGON)
+        if tr > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + w - tr) + [q[1]] * tr, (y + tr) + [q[2]] * tr) end
+                end
+            end
+        else
+            C.glVertex2d(x + w, y)
+        end
+        if br > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + w - br) - [q[2]] * br, (y + h - br) + [q[1]] * br) end
+                end
+            end
+        else
+            C.glVertex2d(x + w, y + h)
+        end
+        if bl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + bl) - [q[1]] * bl, (y + h - bl) - [q[2]] * bl) end
+                end
+            end
+        else
+            C.glVertex2d(x, y + h)
+        end
+        if tl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + tl) + [q[2]] * tl, (y + tl) - [q[1]] * tl) end
+                end
+            end
+        else
+            C.glVertex2d(x, y)
+        end
+        C.glEnd()
+    end
+    draw_rounded_solid_rt:compile()
+
+    local draw_rounded_stroke_rt = terra(rt : &Runtime, x : double, y : double, w : double, h : double, tl : double, tr : double, br : double, bl : double, r : double, g : double, b : double, a : double, stroke_width : double)
+        var limit = w
+        if h < limit then limit = h end
+        limit = limit * 0.5
+        if tl < 0 then tl = 0 elseif tl > limit then tl = limit end
+        if tr < 0 then tr = 0 elseif tr > limit then tr = limit end
+        if br < 0 then br = 0 elseif br > limit then br = limit end
+        if bl < 0 then bl = 0 elseif bl > limit then bl = limit end
+
+        C.glLineWidth(stroke_width)
+        C.glColor4d(r, g, b, a * rt.opacity)
+        C.glBegin(C.GL_LINE_LOOP)
+        if tr > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + w - tr) + [q[1]] * tr, (y + tr) + [q[2]] * tr) end
+                end
+            end
+        else
+            C.glVertex2d(x + w, y)
+        end
+        if br > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + w - br) - [q[2]] * br, (y + h - br) + [q[1]] * br) end
+                end
+            end
+        else
+            C.glVertex2d(x + w, y + h)
+        end
+        if bl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + bl) - [q[1]] * bl, (y + h - bl) - [q[2]] * bl) end
+                end
+            end
+        else
+            C.glVertex2d(x, y + h)
+        end
+        if tl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote C.glVertex2d((x + tl) + [q[2]] * tl, (y + tl) - [q[1]] * tl) end
+                end
+            end
+        else
+            C.glVertex2d(x, y)
+        end
+        C.glEnd()
+    end
+    draw_rounded_stroke_rt:compile()
+
+    local draw_rounded_textured_rt = terra(rt : &Runtime, tex_id : uint32, x : double, y : double, w : double, h : double, tl : double, tr : double, br : double, bl : double, opacity : double)
+        var limit = w
+        if h < limit then limit = h end
+        limit = limit * 0.5
+        if tl < 0 then tl = 0 elseif tl > limit then tl = limit end
+        if tr < 0 then tr = 0 elseif tr > limit then tr = limit end
+        if br < 0 then br = 0 elseif br > limit then br = limit end
+        if bl < 0 then bl = 0 elseif bl > limit then bl = limit end
+
+        C.glBindTexture(C.GL_TEXTURE_2D, tex_id)
+        C.glColor4d(1.0, 1.0, 1.0, opacity * rt.opacity)
+        C.glBegin(C.GL_POLYGON)
+        if tr > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote
+                        C.glTexCoord2d((((x + w - tr) + [q[1]] * tr) - x) / w, (((y + tr) + [q[2]] * tr) - y) / h)
+                        C.glVertex2d((x + w - tr) + [q[1]] * tr, (y + tr) + [q[2]] * tr)
+                    end
+                end
+            end
+        else
+            C.glTexCoord2d(1.0, 0.0)
+            C.glVertex2d(x + w, y)
+        end
+        if br > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote
+                        C.glTexCoord2d((((x + w - br) - [q[2]] * br) - x) / w, (((y + h - br) + [q[1]] * br) - y) / h)
+                        C.glVertex2d((x + w - br) - [q[2]] * br, (y + h - br) + [q[1]] * br)
+                    end
+                end
+            end
+        else
+            C.glTexCoord2d(1.0, 1.0)
+            C.glVertex2d(x + w, y + h)
+        end
+        if bl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote
+                        C.glTexCoord2d((((x + bl) - [q[1]] * bl) - x) / w, (((y + h - bl) - [q[2]] * bl) - y) / h)
+                        C.glVertex2d((x + bl) - [q[1]] * bl, (y + h - bl) - [q[2]] * bl)
+                    end
+                end
+            end
+        else
+            C.glTexCoord2d(0.0, 1.0)
+            C.glVertex2d(x, y + h)
+        end
+        if tl > 0 then
+            escape
+                for _, q in ipairs(QUARTER_ARC) do
+                    emit quote
+                        C.glTexCoord2d((((x + tl) + [q[2]] * tl) - x) / w, (((y + tl) - [q[1]] * tl) - y) / h)
+                        C.glVertex2d((x + tl) + [q[2]] * tl, (y + tl) - [q[1]] * tl)
+                    end
+                end
+            end
+        else
+            C.glTexCoord2d(0.0, 0.0)
+            C.glVertex2d(x, y)
+        end
+        C.glEnd()
+    end
+    draw_rounded_textured_rt:compile()
+
     local begin_batch = terra(rt : &Runtime, batch : &BatchState)
         rt.opacity_stack[rt.opacity_top] = rt.opacity
         rt.opacity_top = rt.opacity_top + 1
@@ -441,9 +668,16 @@ local function build_scene_runner(target, spec)
         var i : int32 = 0
         while i < batch.item_count do
             var item = state.boxes[batch.item_start + i]
-            draw_solid_quad_rt(rt, item.x, item.y, item.w, item.h, item.fill_r, item.fill_g, item.fill_b, item.fill_a)
-            if item.stroke_enabled ~= 0 and item.stroke_width > 0 then
-                draw_stroke_loop_rt(rt, item.x, item.y, item.w, item.h, item.stroke_r, item.stroke_g, item.stroke_b, item.stroke_a, item.stroke_width)
+            if item.tl ~= 0 or item.tr ~= 0 or item.br ~= 0 or item.bl ~= 0 then
+                draw_rounded_solid_rt(rt, item.x, item.y, item.w, item.h, item.tl, item.tr, item.br, item.bl, item.fill_r, item.fill_g, item.fill_b, item.fill_a)
+                if item.stroke_enabled ~= 0 and item.stroke_width > 0 then
+                    draw_rounded_stroke_rt(rt, item.x, item.y, item.w, item.h, item.tl, item.tr, item.br, item.bl, item.stroke_r, item.stroke_g, item.stroke_b, item.stroke_a, item.stroke_width)
+                end
+            else
+                draw_solid_quad_rt(rt, item.x, item.y, item.w, item.h, item.fill_r, item.fill_g, item.fill_b, item.fill_a)
+                if item.stroke_enabled ~= 0 and item.stroke_width > 0 then
+                    draw_stroke_loop_rt(rt, item.x, item.y, item.w, item.h, item.stroke_r, item.stroke_g, item.stroke_b, item.stroke_a, item.stroke_width)
+                end
             end
             i = i + 1
         end
@@ -465,7 +699,16 @@ local function build_scene_runner(target, spec)
                     if item.blur > 0 then expansion = item.blur * (passes - j) / passes end
                     var alpha = item.a
                     if item.blur > 0 then alpha = item.a / passes end
-                    draw_solid_quad_rt(rt, item.x + item.dx - item.spread - expansion, item.y + item.dy - item.spread - expansion, item.w + 2 * (item.spread + expansion), item.h + 2 * (item.spread + expansion), item.r, item.g, item.b, alpha)
+                    var sx = item.x + item.dx - item.spread - expansion
+                    var sy = item.y + item.dy - item.spread - expansion
+                    var sw = item.w + 2 * (item.spread + expansion)
+                    var sh = item.h + 2 * (item.spread + expansion)
+                    if item.tl ~= 0 or item.tr ~= 0 or item.br ~= 0 or item.bl ~= 0 then
+                        var grow = item.spread + expansion
+                        draw_rounded_solid_rt(rt, sx, sy, sw, sh, item.tl + grow, item.tr + grow, item.br + grow, item.bl + grow, item.r, item.g, item.b, alpha)
+                    else
+                        draw_solid_quad_rt(rt, sx, sy, sw, sh, item.r, item.g, item.b, alpha)
+                    end
                     j = j + 1
                 end
             else
@@ -536,16 +779,31 @@ local function build_scene_runner(target, spec)
     render_text:compile()
 
     local render_images = terra(rt : &Runtime, state : &SceneState, batch : &BatchState)
-        C.glDisable(C.GL_TEXTURE_2D)
+        C.glEnable(C.GL_TEXTURE_2D)
         var i : int32 = 0
         while i < batch.item_count do
             var item = state.images[batch.item_start + i]
-            var stroke_width = 1.0
-            if item.sampling == 1 then stroke_width = 2.0 end
-            draw_solid_quad_rt(rt, item.x, item.y, item.w, item.h, 0.45, 0.45, 0.48, item.opacity)
-            draw_stroke_loop_rt(rt, item.x, item.y, item.w, item.h, 0.75, 0.75, 0.78, item.opacity, stroke_width)
+            if item.tex_id ~= 0 then
+                if item.tl ~= 0 or item.tr ~= 0 or item.br ~= 0 or item.bl ~= 0 then
+                    draw_rounded_textured_rt(rt, item.tex_id, item.x, item.y, item.w, item.h, item.tl, item.tr, item.br, item.bl, item.opacity)
+                else
+                    C.glBindTexture(C.GL_TEXTURE_2D, item.tex_id)
+                    C.glColor4d(1.0, 1.0, 1.0, item.opacity * rt.opacity)
+                    C.glBegin(C.GL_QUADS)
+                    C.glTexCoord2d(0.0, 0.0)
+                    C.glVertex2d(item.x, item.y)
+                    C.glTexCoord2d(1.0, 0.0)
+                    C.glVertex2d(item.x + item.w, item.y)
+                    C.glTexCoord2d(1.0, 1.0)
+                    C.glVertex2d(item.x + item.w, item.y + item.h)
+                    C.glTexCoord2d(0.0, 1.0)
+                    C.glVertex2d(item.x, item.y + item.h)
+                    C.glEnd()
+                end
+            end
             i = i + 1
         end
+        C.glDisable(C.GL_TEXTURE_2D)
     end
     render_images:compile()
 
@@ -640,12 +898,19 @@ local function kernel_shadow_row(item)
 end
 
 local function kernel_image_row(item, assets)
-    Assets.image_path(assets, item.image)
+    local path = Assets.image_path(assets, item.image)
     if not square_corners(item.corners) then
         error("UiKernel.Payload:materialize(image): rounded corners are not implemented yet", 3)
     end
 
+    local sampling = item.sampling.kind == "Nearest" and "Nearest" or "Linear"
+    local image = ImageData.load_rgba(path)
+    local texture = (image.width > 0 and image.height > 0)
+        and SdlGl.ensure_rgba_texture(ImageData.texture_key(path, sampling), image.width, image.height, image.pixels, sampling)
+        or nil
+
     return {
+        texture and texture.id or 0,
         item.rect.x,
         item.rect.y,
         item.rect.w,
@@ -655,39 +920,71 @@ local function kernel_image_row(item, assets)
     }
 end
 
-local function materialize_text_rows(payload, assets)
-    return F.iter(payload.text_runs):map(function(run)
-        local font_path = Assets.font_path(assets, run.font)
-        local rendered = Text.rasterize_text(
-            font_path,
-            run.size_px,
-            run.text.value,
-            run.color,
-            run.wrap.kind,
-            run.align.kind,
-            run.bounds.w
-        )
-        local texture = (rendered.w > 0 and rendered.h > 0)
-            and SdlGl.ensure_rgba_texture(rendered.cache_key, rendered.w, rendered.h, rendered.pixels, "Linear")
-            or nil
+local function ensure_text_run_capacity(state, count)
+    if count <= state.text_run_capacity then return end
 
-        local x = run.bounds.x
-        if run.wrap.kind == "NoWrap" then
-            if run.align.kind == "TextCenter" then
-                x = x + math.max(0, (run.bounds.w - rendered.w) / 2)
-            elseif run.align.kind == "TextEnd" then
-                x = x + math.max(0, run.bounds.w - rendered.w)
+    if state.text_runs ~= nil then
+        Std.free(state.text_runs)
+        state.text_runs = nil
+    end
+
+    local n = math.max(1, count)
+    state.text_runs = terralib.cast(&TextRunState, Std.malloc(terralib.sizeof(TextRunState) * n))
+    if state.text_runs == nil then
+        error("UiMachine.Render: failed to allocate text run cache", 3)
+    end
+
+    state.text_run_capacity = n
+    for i = 0, n - 1 do
+        state.text_runs[i].cache_key = 0
+        state.text_runs[i].tex_id = 0
+        state.text_runs[i].x1 = 0
+        state.text_runs[i].y1 = 0
+        state.text_runs[i].x2 = 0
+        state.text_runs[i].y2 = 0
+    end
+end
+
+local function materialize_text_runs(payload, assets, state)
+    local count = #payload.text_runs
+    ensure_text_run_capacity(state, count)
+
+    for i, run in ipairs(payload.text_runs) do
+        local dst = state.text_runs[i - 1]
+        if dst.cache_key ~= run.cache_key then
+            local font_path = Assets.font_path(assets, run.font)
+            local rendered = Text.rasterize_text(
+                font_path,
+                run.size_px,
+                run.text.value,
+                run.color,
+                run.wrap.kind,
+                run.align.kind,
+                run.bounds.w
+            )
+            local texture = (rendered.w > 0 and rendered.h > 0)
+                and SdlGl.ensure_rgba_texture(rendered.cache_key, rendered.w, rendered.h, rendered.pixels, "Linear")
+                or nil
+
+            local x = run.bounds.x
+            if run.wrap.kind == "NoWrap" then
+                if run.align.kind == "TextCenter" then
+                    x = x + math.max(0, (run.bounds.w - rendered.w) / 2)
+                elseif run.align.kind == "TextEnd" then
+                    x = x + math.max(0, run.bounds.w - rendered.w)
+                end
             end
-        end
 
-        return {
-            texture and texture.id or 0,
-            x,
-            run.bounds.y,
-            x + rendered.w,
-            run.bounds.y + rendered.h,
-        }
-    end):totable()
+            dst.cache_key = run.cache_key
+            dst.tex_id = texture and texture.id or 0
+            dst.x1 = x
+            dst.y1 = run.bounds.y
+            dst.x2 = x + rendered.w
+            dst.y2 = run.bounds.y + rendered.h
+        end
+    end
+
+    state.text_run_count = count
 end
 
 local function kernel_batch_row(payload, batch)
@@ -769,98 +1066,124 @@ local function kernel_batch_row(payload, batch)
     })
 end
 
+local function validate_state_model(machine)
+    local param = machine.param.payload
+    local state = machine.state
+
+    local function mismatch(field, expected, actual)
+        error(
+            string.format(
+                "UiMachine.Render: state model mismatch for %s: expected %s, got %s",
+                field,
+                tostring(expected),
+                tostring(actual)
+            ),
+            3
+        )
+    end
+
+    if state.batch_count ~= #param.batches then mismatch("batch_count", #param.batches, state.batch_count) end
+    if state.box_count ~= #param.boxes then mismatch("box_count", #param.boxes, state.box_count) end
+    if state.shadow_count ~= #param.shadows then mismatch("shadow_count", #param.shadows, state.shadow_count) end
+    if state.text_run_count ~= #param.text_runs then mismatch("text_run_count", #param.text_runs, state.text_run_count) end
+    if state.image_count ~= #param.images then mismatch("image_count", #param.images, state.image_count) end
+    if state.custom_count ~= #param.customs then mismatch("custom_count", #param.customs, state.custom_count) end
+end
+
+local function materialize_param(param, target, assets, state)
+    target = normalize_target(target)
+    if type(state) ~= "cdata" and type(state) ~= "userdata" and type(state) ~= "table" then
+        -- Keep error text simple; the important contract is that compile()
+        -- allocates the state_t and passes it here.
+    end
+
+    local payload = param
+
+    local box_rows = F.iter(payload.boxes):map(kernel_box_row):totable()
+    local shadow_rows = F.iter(payload.shadows):map(kernel_shadow_row):totable()
+    local image_rows = F.iter(payload.images):map(function(item)
+        return kernel_image_row(item, assets)
+    end):totable()
+    local custom_rows = F.iter(payload.customs):map(function(item)
+        return { item.payload }
+    end):totable()
+    materialize_text_runs(payload, assets, state)
+
+    local batch_offsets = {
+        BoxBatch = 0,
+        ShadowBatch = 0,
+        TextBatch = 0,
+        ImageBatch = 0,
+        CustomBatch = 0,
+    }
+
+    local batch_rows = F.iter(payload.batches):map(function(batch)
+        local row = kernel_batch_row(payload, batch)
+        local ctor = U.match(batch.kind, {
+            BoxKind = function() return "BoxBatch" end,
+            ShadowKind = function() return "ShadowBatch" end,
+            TextKind = function() return "TextBatch" end,
+            ImageKind = function() return "ImageBatch" end,
+            CustomKind = function() return "CustomBatch" end,
+        })
+        local item_start = batch_offsets[ctor]
+        row[3] = item_start
+        batch_offsets[ctor] = item_start + row[4]
+        return row
+    end):totable()
+
+    local batch_arr, batch_ptr = create_state_array(BatchState, batch_rows)
+    local box_arr, box_ptr = create_state_array(BoxItemState, box_rows)
+    local shadow_arr, shadow_ptr = create_state_array(ShadowItemState, shadow_rows)
+    local image_arr, image_ptr = create_state_array(ImageItemState, image_rows)
+    local custom_arr, custom_ptr = create_state_array(CustomItemState, custom_rows)
+
+    state.batch_count = #batch_rows
+    state.batches = batch_ptr
+    state.box_count = #box_rows
+    state.boxes = box_ptr
+    state.shadow_count = #shadow_rows
+    state.shadows = shadow_ptr
+    state.image_count = #image_rows
+    state.images = image_ptr
+    state.custom_count = #custom_rows
+    state.customs = custom_ptr
+
+    return {
+        batches = batch_arr,
+        boxes = box_arr,
+        shadows = shadow_arr,
+        images = image_arr,
+        customs = custom_arr,
+    }
+end
+
 return function(T)
     -- ---------------------------------------------------------------------
     -- Public boundary:
-    --   UiKernel.Payload:materialize(target, assets, state) -> keep
+    --   UiMachine.Render:materialize(target, assets, state) -> keep
     -- ---------------------------------------------------------------------
     -- assets is explicit here because text/image runtime payload preparation
     -- still depends on the resource catalog. The exact code shape does not, so
-    -- assets stays out of Spec and out of the stable runner.
-    T.UiKernel.Payload.materialize = function(payload, target, assets, state)
-        target = normalize_target(target)
-        if type(state) ~= "cdata" and type(state) ~= "userdata" and type(state) ~= "table" then
-            -- Keep error text simple; the important contract is that compile()
-            -- allocates the state_t and passes it here.
-        end
-
-        local box_rows = F.iter(payload.boxes):map(kernel_box_row):totable()
-        local shadow_rows = F.iter(payload.shadows):map(kernel_shadow_row):totable()
-        local image_rows = F.iter(payload.images):map(function(item)
-            return kernel_image_row(item, assets)
-        end):totable()
-        local custom_rows = F.iter(payload.customs):map(function(item)
-            return { item.payload }
-        end):totable()
-        local text_run_rows = materialize_text_rows(payload, assets)
-
-        local batch_offsets = {
-            BoxBatch = 0,
-            ShadowBatch = 0,
-            TextBatch = 0,
-            ImageBatch = 0,
-            CustomBatch = 0,
-        }
-
-        local batch_rows = F.iter(payload.batches):map(function(batch)
-            local row = kernel_batch_row(payload, batch)
-            local ctor = U.match(batch.kind, {
-                BoxKind = function() return "BoxBatch" end,
-                ShadowKind = function() return "ShadowBatch" end,
-                TextKind = function() return "TextBatch" end,
-                ImageKind = function() return "ImageBatch" end,
-                CustomKind = function() return "CustomBatch" end,
-            })
-            local item_start = batch_offsets[ctor]
-            row[3] = item_start
-            batch_offsets[ctor] = item_start + row[4]
-            return row
-        end):totable()
-
-        local batch_arr, batch_ptr = create_state_array(BatchState, batch_rows)
-        local box_arr, box_ptr = create_state_array(BoxItemState, box_rows)
-        local shadow_arr, shadow_ptr = create_state_array(ShadowItemState, shadow_rows)
-        local run_arr, run_ptr = create_state_array(TextRunState, text_run_rows)
-        local image_arr, image_ptr = create_state_array(ImageItemState, image_rows)
-        local custom_arr, custom_ptr = create_state_array(CustomItemState, custom_rows)
-
-        state.batch_count = #batch_rows
-        state.batches = batch_ptr
-        state.box_count = #box_rows
-        state.boxes = box_ptr
-        state.shadow_count = #shadow_rows
-        state.shadows = shadow_ptr
-        state.text_run_count = #text_run_rows
-        state.text_runs = run_ptr
-        state.image_count = #image_rows
-        state.images = image_ptr
-        state.custom_count = #custom_rows
-        state.customs = custom_ptr
-
-        return {
-            batches = batch_arr,
-            boxes = box_arr,
-            shadows = shadow_arr,
-            text_runs = run_arr,
-            images = image_arr,
-            customs = custom_arr,
-        }
+    -- assets stays out of gen and out of the stable runner.
+    T.UiMachine.Render.materialize = function(machine, target, assets, state)
+        validate_state_model(machine)
+        return materialize_param(machine.param.payload, target, assets, state)
     end
 
     -- ---------------------------------------------------------------------
     -- Public boundary:
-    --   UiKernel.Spec:compile(target) -> Unit
+    --   UiMachine.Gen:compile(target) -> Unit
     -- ---------------------------------------------------------------------
-    -- compile now depends only on baked machine facts. Live scene payload is
-    -- loaded explicitly later through UiKernel.Payload:materialize.
-    T.UiKernel.Spec.compile = U.terminal(function(spec, target)
+    -- compile is memoized only at the ASDL boundary, on machine `gen`.
+    T.UiMachine.Gen.compile = U.terminal(function(gen, target)
         target = normalize_target(target)
-        local runner = build_scene_runner(target, spec)
+        local runner = build_scene_runner(target, gen.spec)
 
         return stateful_unit(runner, SceneState, function(state)
-            clear_scene_state(state)
+            init_scene_state(state)
         end, function(state)
-            clear_scene_state(state)
+            release_scene_state(state)
         end)
     end)
 end

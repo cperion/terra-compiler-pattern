@@ -127,6 +127,43 @@ local function test_with_reconstructs()
     assert(getmetatable(p2) == Point)
 end
 
+local function test_memo_inspector()
+    local f = U.memoize("double", function(x)
+        return x * 2
+    end)
+
+    local I = U.memo()
+    I.reset()
+
+    assert(f(3) == 6)
+    assert(f(3) == 6)
+    assert(f(4) == 8)
+
+    local stats = U.memo_stats(f)
+    assert(stats ~= nil)
+    assert(stats.name == "double")
+    assert(stats.calls == 3)
+    assert(stats.hits == 1)
+    assert(stats.misses == 2)
+    assert(stats.unique_keys == 2)
+
+    local report = U.memo_report()
+    assert(report:match("MEMOIZE REPORT"))
+    assert(report:match("double"))
+
+    local quality = U.memo_quality()
+    assert(quality:match("DESIGN QUALITY"))
+
+    local edit = U.memo_measure_edit("repeat cached call", function()
+        assert(f(3) == 6)
+    end)
+    assert(edit:match("EDIT: repeat cached call"))
+    assert(edit:match("Reuse:"))
+
+    local diag = U.memo_diagnose()
+    assert(type(diag) == "string")
+end
+
 local function test_errors_merge_and_call()
     local errs = U.errors()
 
@@ -153,6 +190,7 @@ test_memoize_identity()
 test_with_fallback_and_with_errors()
 test_match_exhaustive()
 test_with_reconstructs()
+test_memo_inspector()
 test_errors_merge_and_call()
 
 print("unit_core_test.lua: ok")

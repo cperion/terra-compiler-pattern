@@ -1,8 +1,8 @@
 local U = require("unit")
-local Backend = require("examples.ui.backend_sdl_gl")
-local RawText = require("examples.ui.backend_text_sdl_ttf")
+local Backend = require("examples.ui.backends.terra_sdl_gl")
+local RawText = require("examples.ui.backends.text_sdl_ttf")
 local Schema = require("examples.ui2.ui2_schema")
-local Demo = require("examples.ui2.ui2_demo_support")
+local Demo = require("examples.ui2.backends.terra_demo_support")
 
 local T = Schema.ctx
 local D = Demo(T, Backend)
@@ -317,14 +317,16 @@ local function lower_ui(bound, viewport, assets)
     local solved = demand:solve(assets)
     local plan = solved:plan()
     local render = plan:specialize_kernel()
-    local unit = render.spec:compile(D.target)
+    local machine = render:define_machine()
+    local unit = machine.gen:compile(D.target)
     local state = ensure_unit_state(unit)
     if state ~= nil then
-        unit.__payload_keep = render.payload:materialize(D.target, assets, state)
+        unit.__payload_keep = machine:materialize(D.target, assets, state)
     end
     return {
         plan = plan,
         render = render,
+        machine = machine,
         unit = unit,
     }
 end

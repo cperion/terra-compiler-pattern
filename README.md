@@ -26,6 +26,7 @@ The detailed design docs remain the source of truth:
 Additional backend notes:
 
 - `docs/luajit-backend.md`
+- `docs/luajit-leaf-rules.md`
 - `docs/unit-shared-core-refactor-plan.md`
 - `docs/backend-benchmarks.md`
 
@@ -82,13 +83,16 @@ The backend only changes how `Unit`s are realized, installed, and executed.
 ### LuaJIT backend
 
 - `unit_luajit.lua`
+- `unit.lua`
+- `unit_schema.lua`
 
 Owns LuaJIT-specific behavior:
 
 - closure-based leaf compilation
-- FFI/table state layouts
+- FFI/cdata state layouts for production leaves
 - LuaJIT hot-slot swapping
 - Lua callback application loop
+- shared schema/spec/inspect support through `unit.lua`
 
 ## Examples
 
@@ -97,6 +101,7 @@ LuaJIT examples live in:
 - `examples/luajit/luajit_synth.lua`
 - `examples/luajit/luajit_biquad.lua`
 - `examples/luajit/luajit_app_demo.lua`
+- `examples/ui2/ui2_demo_luajit.lua`
 
 Run from the repository root, e.g.:
 

@@ -246,20 +246,20 @@ end
 -- they must use terralib.memoize identity caching.
 -- ═══════════════════════════════════════════════════════════════
 
-function U.memoize(fn)
-    return terralib.memoize(fn)
+function U.memoize(name_or_fn, maybe_fn)
+    return U._memoize_with(terralib.memoize, "memoize", name_or_fn, maybe_fn)
 end
 
 -- transition: memoized ASDL → ASDL transform
 -- The workhorse. Phase narrowing. Knowledge consumed.
-function U.transition(fn)
-    return U.memoize(fn)
+function U.transition(name_or_fn, maybe_fn)
+    return U._memoize_with(terralib.memoize, "transition", name_or_fn, maybe_fn)
 end
 
 -- terminal: memoized ASDL → Unit compilation
 -- Unit.new already validates ABI + calls fn:compile().
-function U.terminal(fn)
-    return U.memoize(fn)
+function U.terminal(name_or_fn, maybe_fn)
+    return U._memoize_with(terralib.memoize, "terminal", name_or_fn, maybe_fn)
 end
 
 

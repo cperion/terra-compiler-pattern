@@ -16,6 +16,15 @@
 --   - drivers / runtime hookup
 
 local M = {}
+local asdl_resolvers = {}
+
+function M.register_asdl_resolver(fn)
+    if type(fn) ~= "function" then
+        error("register_asdl_resolver: fn must be a function", 2)
+    end
+    asdl_resolvers[#asdl_resolvers + 1] = fn
+    return fn
+end
 
 function M.new()
     local U = {}
@@ -28,6 +37,7 @@ function M.new()
     local getmetatable_fn = getmetatable
     local type_fn = type
     local next_fn = next
+    local debug_getinfo = debug and debug.getinfo
 
     local fun = require("fun")
     local iter = fun.iter
@@ -209,6 +219,8 @@ function M.new()
     end
 
     local NIL_KEY = {}
+    local memo_stats_registry = {}
+    local memo_stats_by_fn = setmetatable({}, { __mode = "k" })
 
     local function next_memo_node(node, key)
         if key == nil then key = NIL_KEY end
@@ -234,11 +246,95 @@ function M.new()
         return child
     end
 
-    function U.memoize(fn)
-        if type(fn) ~= "function" then
-            error("U.memoize: fn must be a function", 2)
+    local function infer_memo_name(kind, fn)
+        if debug_getinfo then
+            local info = debug_getinfo(fn, "S")
+            if info then
+                local src = info.short_src or info.source or "?"
+                local line = info.linedefined or 0
+                return string.format("%s@%s:%d", kind, src, line)
+            end
+        end
+        return kind
+    end
+
+    local function parse_memo_args(kind, name_or_fn, maybe_fn)
+        local name, fn
+
+        if type_fn(name_or_fn) == "string" then
+            name = name_or_fn
+            fn = maybe_fn
+        else
+            fn = name_or_fn
         end
 
+        if type_fn(fn) ~= "function" then
+            error(kind .. ": fn must be a function", 2)
+        end
+
+        return name or infer_memo_name(kind, fn), fn
+    end
+
+    local function describe_value(value)
+        local t = type_fn(value)
+
+        if value == nil then return "nil" end
+        if t == "number" or t == "boolean" then return tostring(value) end
+        if t == "string" then
+            if #value > 48 then
+                return string.format("%q…", value:sub(1, 48))
+            end
+            return string.format("%q", value)
+        end
+
+        if t == "table" then
+            local kind = rawget_fn(value, "kind")
+            local id = rawget_fn(value, "id")
+            local mt = getmetatable_fn(value)
+            local mt_name = mt and rawget_fn(mt, "__name") or nil
+            local label = kind or mt_name or "table"
+            if id ~= nil then
+                return string.format("%s#%s", tostring(label), tostring(id))
+            end
+            return tostring(label)
+        end
+
+        if t == "function" then
+            if debug_getinfo then
+                local info = debug_getinfo(value, "S")
+                if info then
+                    return string.format("function@%s:%d",
+                        info.short_src or info.source or "?",
+                        info.linedefined or 0)
+                end
+            end
+            return "function"
+        end
+
+        return t
+    end
+
+    local function describe_args(...)
+        local argc = select("#", ...)
+        if argc == 0 then return "()" end
+
+        local parts = {}
+        local shown = math.min(argc, 4)
+        for i = 1, shown do
+            parts[i] = describe_value(select(i, ...))
+        end
+        if argc > shown then
+            parts[#parts + 1] = string.format("…+%d", argc - shown)
+        end
+        return table.concat(parts, ", ")
+    end
+
+    local function register_stats(stats)
+        memo_stats_registry[#memo_stats_registry + 1] = stats
+        return stats
+    end
+
+    local function backend_memoize(fn)
         local root = {}
 
         return function(...)
@@ -260,12 +356,312 @@ function M.new()
         end
     end
 
-    function U.transition(fn)
-        return U.memoize(fn)
+    function U._memoize_with(backend, kind, name_or_fn, maybe_fn)
+        if type_fn(backend) ~= "function" then
+            error("U._memoize_with: backend must be a function", 2)
+        end
+
+        local name, fn = parse_memo_args(kind, name_or_fn, maybe_fn)
+        local tracker_root = {}
+        local stats = register_stats({
+            name = name,
+            kind = kind,
+            calls = 0,
+            hits = 0,
+            misses = 0,
+            unique_keys = 0,
+            last_miss_reason = nil,
+        })
+        local memoized = backend(fn)
+
+        local wrapped = function(...)
+            stats.calls = stats.calls + 1
+
+            local node = tracker_root
+            local argc = select("#", ...)
+            for i = 1, argc do
+                node = next_memo_node(node, select(i, ...))
+            end
+
+            if rawget(node, "_seen") then
+                stats.hits = stats.hits + 1
+                return memoized(...)
+            end
+
+            local result = pack_fn(memoized(...))
+            node._seen = true
+            stats.misses = stats.misses + 1
+            stats.unique_keys = stats.unique_keys + 1
+            stats.last_miss_reason = describe_args(...)
+            return unpack_fn(result, 1, result.n)
+        end
+
+        memo_stats_by_fn[wrapped] = stats
+        return wrapped
     end
 
-    function U.terminal(fn)
-        return U.memoize(fn)
+    function U.memoize(name_or_fn, maybe_fn)
+        return U._memoize_with(backend_memoize, "memoize", name_or_fn, maybe_fn)
+    end
+
+    function U.transition(name_or_fn, maybe_fn)
+        return U._memoize_with(backend_memoize, "transition", name_or_fn, maybe_fn)
+    end
+
+    function U.terminal(name_or_fn, maybe_fn)
+        return U._memoize_with(backend_memoize, "terminal", name_or_fn, maybe_fn)
+    end
+
+    function U.memo_stats(memoized_fn)
+        return memoized_fn and memo_stats_by_fn[memoized_fn] or nil
+    end
+
+    function U.memo_inspector()
+        local I = {}
+
+        function I.track(memoized_fn)
+            local stats = U.memo_stats(memoized_fn)
+            if not stats then return false end
+
+            local seen = false
+            U.each(memo_stats_registry, function(existing)
+                if existing == stats then seen = true end
+            end)
+            if not seen then
+                memo_stats_registry[#memo_stats_registry + 1] = stats
+            end
+            return true
+        end
+
+        function I.stats()
+            return memo_stats_registry
+        end
+
+        function I.reset()
+            U.each(memo_stats_registry, function(stats)
+                stats.hits = 0
+                stats.misses = 0
+                stats.calls = 0
+                stats.last_miss_reason = nil
+            end)
+        end
+
+        local function sorted_stats()
+            local copy = {}
+            U.each(memo_stats_registry, function(stats)
+                copy[#copy + 1] = stats
+            end)
+            table.sort(copy, function(a, b)
+                local ar = a.calls > 0 and (a.hits / a.calls) or 0
+                local br = b.calls > 0 and (b.hits / b.calls) or 0
+                if ar == br then return a.name < b.name end
+                return ar < br
+            end)
+            return copy
+        end
+
+        function I.report()
+            local lines = {}
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = "MEMOIZE REPORT"
+            lines[#lines + 1] = string.rep("═", 72)
+            lines[#lines + 1] = string.format(
+                "  %-30s  %6s  %6s  %6s  %7s",
+                "boundary", "calls", "hits", "miss", "hit %")
+            lines[#lines + 1] = string.rep("─", 72)
+
+            local total_calls, total_hits, total_misses = 0, 0, 0
+            U.each(sorted_stats(), function(stats)
+                local ratio = stats.calls > 0 and (stats.hits / stats.calls * 100) or 0
+                local indicator = ratio >= 80 and "✓" or (ratio >= 50 and "△" or "✗")
+                lines[#lines + 1] = string.format(
+                    "%s %-30s  %6d  %6d  %6d  %6.1f%%",
+                    indicator, stats.name, stats.calls, stats.hits, stats.misses, ratio)
+                total_calls = total_calls + stats.calls
+                total_hits = total_hits + stats.hits
+                total_misses = total_misses + stats.misses
+            end)
+
+            lines[#lines + 1] = string.rep("─", 72)
+            local total_ratio = total_calls > 0 and (total_hits / total_calls * 100) or 0
+            lines[#lines + 1] = string.format(
+                "  %-30s  %6d  %6d  %6d  %6.1f%%",
+                "TOTAL", total_calls, total_hits, total_misses, total_ratio)
+            lines[#lines + 1] = ""
+            return table.concat(lines, "\n")
+        end
+
+        function I.measure_edit(description, edit_fn)
+            I.reset()
+            edit_fn()
+
+            local lines = {}
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = "EDIT: " .. description
+            lines[#lines + 1] = string.rep("─", 60)
+
+            local total_calls, total_misses = 0, 0
+            U.each(memo_stats_registry, function(stats)
+                total_calls = total_calls + stats.calls
+                total_misses = total_misses + stats.misses
+                if stats.misses > 0 then
+                    lines[#lines + 1] = string.format(
+                        "  RECOMPILED: %-25s  %d/%d",
+                        stats.name, stats.misses, stats.calls)
+                    if stats.last_miss_reason then
+                        lines[#lines + 1] = "              reason: " .. stats.last_miss_reason
+                    end
+                end
+            end)
+
+            local reuse = total_calls > 0 and ((total_calls - total_misses) / total_calls * 100) or 0
+            lines[#lines + 1] = string.rep("─", 60)
+            lines[#lines + 1] = string.format(
+                "  Reuse: %d/%d (%.1f%%)",
+                total_calls - total_misses, total_calls, reuse)
+            lines[#lines + 1] = string.format(
+                "  Work:  %d recompilations out of %d calls",
+                total_misses, total_calls)
+            lines[#lines + 1] = ""
+            return table.concat(lines, "\n")
+        end
+
+        function I.quality()
+            local lines = {}
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = "DESIGN QUALITY"
+            lines[#lines + 1] = string.rep("═", 60)
+
+            local total_hits, total_calls = 0, 0
+            U.each(memo_stats_registry, function(stats)
+                total_hits = total_hits + stats.hits
+                total_calls = total_calls + stats.calls
+            end)
+            local overall = total_calls > 0 and (total_hits / total_calls * 100) or 0
+            lines[#lines + 1] = string.format(
+                "  Overall cache hit ratio:     %6.1f%%", overall)
+
+            local worst_name = "none"
+            local worst_ratio = 100
+            U.each(memo_stats_registry, function(stats)
+                if stats.calls > 5 then
+                    local ratio = stats.hits / stats.calls * 100
+                    if ratio < worst_ratio then
+                        worst_ratio = ratio
+                        worst_name = stats.name
+                    end
+                end
+            end)
+            if worst_name == "none" then worst_ratio = 0 end
+            lines[#lines + 1] = string.format(
+                "  Worst boundary:              %s (%.1f%%)",
+                worst_name, worst_ratio)
+
+            local total_entries = 0
+            U.each(memo_stats_registry, function(stats)
+                total_entries = total_entries + stats.unique_keys
+            end)
+            lines[#lines + 1] = string.format(
+                "  Cache entries:               %d", total_entries)
+            lines[#lines + 1] = ""
+
+            if overall >= 90 then
+                lines[#lines + 1] = "  ✓ EXCELLENT: ASDL decomposition is well-suited for incremental compilation."
+            elseif overall >= 70 then
+                lines[#lines + 1] = "  △ GOOD: Most edits reuse cached results."
+                lines[#lines + 1] = "    Check '" .. worst_name .. "' — it may have too-coarse granularity."
+            elseif overall >= 50 then
+                lines[#lines + 1] = "  △ FAIR: Significant recompilation per edit."
+                lines[#lines + 1] = "    Consider splitting coarse-grained types into finer ASDL nodes."
+            else
+                lines[#lines + 1] = "  ✗ POOR: Most calls miss the cache."
+                lines[#lines + 1] = "    The ASDL decomposition is too coarse, structural sharing is broken, or memoize keys include volatile data."
+            end
+
+            lines[#lines + 1] = ""
+            return table.concat(lines, "\n")
+        end
+
+        function I.diagnose()
+            local problems = {}
+
+            U.each(memo_stats_registry, function(stats)
+                if stats.calls < 2 then return end
+                local ratio = stats.calls > 0 and (stats.hits / stats.calls) or 0
+
+                if ratio == 0 and stats.calls > 3 then
+                    problems[#problems + 1] = {
+                        severity = "critical",
+                        message = stats.name .. " never hits the cache (" .. stats.calls
+                            .. " calls, 0 hits). This may be expected for the root boundary, but otherwise suggests volatile keys or broken structural sharing.",
+                    }
+                elseif ratio < 0.5 and stats.calls > 5 then
+                    problems[#problems + 1] = {
+                        severity = "warning",
+                        message = stats.name .. " has low reuse ("
+                            .. string.format("%.0f%%", ratio * 100)
+                            .. "). The ASDL granularity may be too coarse, or a single edit may be invalidating too many nodes.",
+                    }
+                elseif stats.unique_keys > 10000 then
+                    problems[#problems + 1] = {
+                        severity = "info",
+                        message = stats.name .. " has " .. stats.unique_keys
+                            .. " cache entries. The memoization granularity may be too fine.",
+                    }
+                end
+            end)
+
+            local total_entries = 0
+            U.each(memo_stats_registry, function(stats)
+                total_entries = total_entries + stats.unique_keys
+            end)
+            if total_entries > 50000 then
+                problems[#problems + 1] = {
+                    severity = "warning",
+                    message = "Total cache entries: " .. total_entries
+                        .. ". Consider adding eviction or memoizing at a coarser boundary.",
+                }
+            end
+
+            if #problems == 0 then
+                return "  ✓ No memoize design problems detected.\n"
+            end
+
+            local lines = {}
+            U.each(problems, function(problem)
+                local icon = problem.severity == "critical" and "✗"
+                    or (problem.severity == "warning" and "△" or "○")
+                lines[#lines + 1] = "  " .. icon .. " " .. problem.message
+            end)
+            return table.concat(lines, "\n\n") .. "\n"
+        end
+
+        return I
+    end
+
+    function U.memo()
+        U._memo_singleton = U._memo_singleton or U.memo_inspector()
+        return U._memo_singleton
+    end
+
+    function U.memo_report()
+        return U.memo().report()
+    end
+
+    function U.memo_quality()
+        return U.memo().quality()
+    end
+
+    function U.memo_diagnose()
+        return U.memo().diagnose()
+    end
+
+    function U.memo_measure_edit(description, fn)
+        return U.memo().measure_edit(description, fn)
+    end
+
+    function U.memo_reset()
+        return U.memo().reset()
     end
 
     function U.with_fallback(fn, neutral)
@@ -328,8 +724,27 @@ function M.new()
         }
     end
 
-    function U.match(value, arms)
+    local function asdl_mt(value)
         local mt = getmetatable(value)
+        if type(mt) == "table" then return mt end
+
+        if debug and type(debug.getmetatable) == "function" then
+            local dbg_mt = debug.getmetatable(value)
+            if type(dbg_mt) == "table" and (dbg_mt.__fields or dbg_mt.__sum_parent or dbg_mt.__variants or dbg_mt.__name) then
+                return dbg_mt
+            end
+        end
+
+        for i = 1, #asdl_resolvers do
+            local resolved = asdl_resolvers[i](value)
+            if type(resolved) == "table" then return resolved end
+        end
+
+        return nil
+    end
+
+    function U.match(value, arms)
+        local mt = asdl_mt(value)
 
         if mt then
             local parent = mt.__sum_parent
@@ -361,7 +776,7 @@ function M.new()
     end
 
     function U.with(node, overrides)
-        local mt = getmetatable(node)
+        local mt = asdl_mt(node)
         if not mt then
             error("U.with: node has no metatable — is this an ASDL type?", 2)
         end
@@ -381,6 +796,8 @@ function M.new()
 
         return mt(unpack_fn(args, 1, #fields))
     end
+
+    U.register_asdl_resolver = M.register_asdl_resolver
 
     return U
 end

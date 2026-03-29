@@ -1,5 +1,4 @@
-local asdl = require("asdl")
-local List = asdl.List
+local List = require("asdl").List
 
 local Backend = require("examples.ui.backend_sdl_gl")
 local RawText = require("examples.ui.backend_text_sdl_ttf")

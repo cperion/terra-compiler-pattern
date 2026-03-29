@@ -1,6 +1,5 @@
-local asdl = require("asdl")
 local U = require("unit")
-local List = asdl.List
+local List = require("asdl").List
 
 return function(T, Backend)
     local C = Backend.headers()

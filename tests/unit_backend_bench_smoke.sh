@@ -14,5 +14,9 @@ luajit bench/backend_compare_report.lua "$TERRA_OUT" "$LJ_OUT" >/dev/null
 
 grep -q '^METRIC exec_biquad_ns_per_sample ' "$TERRA_OUT"
 grep -q '^METRIC exec_biquad_ns_per_sample ' "$LJ_OUT"
+grep -q '^METRIC compile_chain_edit_avg_ns ' "$TERRA_OUT"
+grep -q '^METRIC compile_chain_edit_avg_ns ' "$LJ_OUT"
+grep -q '^METRIC exec_chain_small_ns_per_sample ' "$TERRA_OUT"
+grep -q '^METRIC exec_chain_small_ns_per_sample ' "$LJ_OUT"
 
 echo "unit_backend_bench_smoke.sh: ok"

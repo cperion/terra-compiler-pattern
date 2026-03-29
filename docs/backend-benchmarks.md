@@ -4,15 +4,26 @@ This repository now includes a direct Terra vs LuaJIT backend benchmark.
 
 ## Goal
 
-Measure two different costs separately:
+Measure several different costs separately:
 
 1. **cold compile cost**
    - Terra: quote construction + LLVM compilation
    - LuaJIT: closure construction / memoized terminal creation
 
-2. **steady-state execution cost**
+2. **warm memo-hit compile cost**
+   - asking for the same compiled subtree again after memoization is already warm
+
+3. **incremental one-edit rebuild cost**
+   - compile an old chain
+   - edit one middle node while structurally reusing siblings
+   - measure the cost of recompiling the edited chain
+
+4. **steady-state execution cost**
    - sample processing throughput after warmup
    - reported as `ns/sample`
+
+5. **small-block steady-state execution cost**
+   - same idea as steady-state throughput, but with a tiny block size to surface dispatch/composition overhead that large blocks can hide
 
 This gives practical intelligence on the tradeoff:
 
@@ -34,13 +45,18 @@ Current repository-level conclusion:
 
 ## What is benchmarked
 
-Three kernels are measured on both backends:
+The benchmark now exercises several kernel shapes on both backends:
 
 - `gain`
 - `biquad`
-- `chain`
+- `chain` — alternating biquads and gains through the backend's real `U.compose` path
+- `gain-chain` — a stateless composition-heavy chain used to expose compose/call overhead more directly
 
-The chain is an alternating sequence of biquads and gains built through the backend's real `U.compose` path.
+In addition to cold compile and large-block execution, the benchmark also reports:
+
+- `chain memo hit`
+- `chain one-edit`
+- small-block execution metrics
 
 So the benchmark exercises:
 
@@ -76,6 +92,7 @@ or directly:
 You can tune the benchmark size:
 
 - `BENCH_BLOCK` default `16384`
+- `BENCH_SMALL_BLOCK` default `16`
 - `BENCH_WARMUP` default `64`
 - `BENCH_ITERS` default `256`
 - `BENCH_COMPILE_ITERS` default `64`
@@ -94,12 +111,20 @@ The heavy runner writes raw metrics plus a markdown summary to:
 
 ## Reading the report
 
-### Compile section
+### Cold compile section
 
 Reported as average time per cold compile.
 
 - ratios are shown as `terra/lj`
 - values greater than `1x` mean Terra compilation costs more than LuaJIT closure construction
+
+### Compile reuse / incremental section
+
+Reported as average time per warm memo hit or one-edit incremental rebuild.
+
+- `chain memo hit` asks for the exact same compiled chain again after the cache is warm
+- `chain one-edit` recompiles a new chain where only the middle node changed and all siblings were structurally reused
+- ratios are shown as `terra/lj`
 
 ### Execution section
 
@@ -107,6 +132,8 @@ Reported as net `ns/sample` after subtracting buffer reset baseline.
 
 - ratios are shown as `lj/terra`
 - values greater than `1x` mean LuaJIT is slower than Terra in steady-state sample processing
+- `gain-chain` is especially useful for exposing composition/call overhead with little arithmetic hiding it
+- small-block execution is especially useful for surfacing dispatch/composition overhead that large blocks can hide
 
 The heavy matrix report prints one table per scenario with:
 
@@ -127,8 +154,11 @@ It measures this repository's current backend implementations with:
 
 So the benchmark should be used as an architectural instrument:
 
-- how expensive is Terra compile time here?
+- how expensive is Terra cold compile here?
+- how cheap are warm memo hits on each backend?
+- how much does a one-node incremental edit really cost?
 - how expensive is LuaJIT execution here?
+- how much overhead is hidden by large block sizes?
 - where is the crossover for your workload?
 
 That is the useful intelligence.

@@ -1,0 +1,74 @@
+module Asdl {
+    module Source {
+        Spec = (Definition* definitions) unique
+
+        Definition = SourceModuleDef(string name, Definition* definitions) unique
+                   | SourceTypeDef(string name, TypeExpr type_expr) unique
+
+        TypeExpr = SourceProduct(Field* fields, boolean unique_flag) unique
+                 | SourceSum(Constructor* constructors, Field* attribute_fields) unique
+
+        Constructor = (string name, Field* fields, boolean unique_flag) unique
+
+        Field = (TypeRef type_ref, Arity arity, string name) unique
+
+        TypeRef = BuiltinTypeRef(string name) unique
+                | NamedTypeRef(string* parts) unique
+
+        Arity = ArityOne
+              | ArityOptional
+              | ArityMany
+    }
+
+    module Resolved {
+        Spec = (Definition* definitions) unique
+
+        Definition = ResolvedModuleDef(string fqname, Definition* definitions) unique
+                   | ResolvedTypeDef(string fqname, TypeExpr type_expr) unique
+
+        TypeExpr = ResolvedProduct(Field* fields, boolean unique_flag) unique
+                 | ResolvedSum(Constructor* constructors, Field* attribute_fields) unique
+
+        Constructor = (string fqname, string kind_name, Field* fields, boolean unique_flag) unique
+
+        Field = (TypeRef type_ref, Arity arity, string name) unique
+
+        TypeRef = ResolvedBuiltinTypeRef(string name) unique
+                | ResolvedDefinedTypeRef(string fqname) unique
+
+        Arity = ResolvedArityOne
+              | ResolvedArityOptional
+              | ResolvedArityMany
+    }
+
+    module LuaJit {
+        Spec = (TypeLayout* types) unique
+
+        TypeLayout = ProductLayout(
+                        string fqname,
+                        string ctype_name,
+                        Slot* slots,
+                        boolean unique_flag
+                     ) unique
+                   | SumLayout(
+                        string fqname,
+                        string tag_ctype,
+                        VariantLayout* variants
+                     ) unique
+
+        VariantLayout = (
+            string fqname,
+            string kind_name,
+            number tag_value,
+            string ctype_name,
+            Slot* slots,
+            boolean unique_flag
+        ) unique
+
+        Slot = (string name, string source_type_name, SlotType slot_type, boolean optional_flag) unique
+
+        SlotType = ScalarSlotType(string c_name) unique
+                 | RefSlotType(string target_ctype) unique
+                 | ListRefSlotType(string elem_ctype) unique
+    }
+}

@@ -12,7 +12,13 @@ The deeper point is stronger: the so-called Terra Compiler Pattern is not fundam
 
 Terra is one backend that realizes these Units explicitly through quotes and LLVM. LuaJIT is another backend that realizes them through closures, FFI state, and trace compilation. In a JIT-native runtime, much of the backend compiler is already available; our job is to emit terminal code that is ultra-monomorphic and specialization-friendly.
 
-LuaJIT is now a real backend in its own right in this repository, and should usually be the default backend on JIT-native platforms. Terra remains the opt-in strong backend when explicit staging, static native layout, ABI control, or LLVM-native optimization are worth the extra cost.
+LuaJIT is now a real backend in its own right in this repository, and should usually be the default backend on JIT-native platforms. Terra remains the opt-in strong backend when explicit staging, static native layout, ABI control, SIMD, or LLVM-native optimization are worth the extra cost.
+
+But LuaJIT must be understood correctly: it is not the permissive dynamic-tables backend. The backend contract is still typed and compiler-shaped. The pure layer stays ASDL + LuaFun-style transforms, and terminal leaves must lower to monomorphic LuaJIT code over FFI/cdata-backed state and payload layouts.
+
+See also:
+
+- `docs/luajit-leaf-rules.md`
 
 ## Files
 
@@ -32,8 +38,8 @@ On Terra:
 
 On LuaJIT:
 
-- `Unit.fn` is a specialized Lua function of shape `fn(state, ...)`
-- `Unit.state_t` is a layout descriptor with `alloc()` and `release()`
+- `Unit.fn` is a specialized monomorphic Lua function of shape `fn(state, ...)`
+- `Unit.state_t` is a typed FFI/cdata-backed layout descriptor with `alloc()` and `release()`
 
 This preserves the same architectural split:
 
@@ -63,9 +69,34 @@ The following concepts are shared across backends:
 LuaJIT uses:
 
 - closure capture instead of Terra quotes
-- FFI/table state instead of Terra struct types
-- callback/table swapping instead of Terra pointer globals
+- FFI/cdata state instead of Terra struct types
+- callback swapping instead of Terra pointer globals
 - JIT tracing instead of LLVM codegen
+
+## LuaJIT leaf constraints
+
+LuaJIT leaves must be treated with almost the same backend discipline as raw Terra leaves.
+
+Required properties:
+
+- monomorphic hot functions
+- FFI/cdata-backed `state_t`
+- FFI/cdata-backed live payload/state accessed by compiled functions
+- fixed field access and fixed indexed loops
+- no runtime interpretation of source trees in the hot path
+
+Not allowed in production leaves:
+
+- opaque Lua tables as kernel state
+- shape-varying table payloads consumed by compiled functions
+- string-tag dispatch in hot loops
+- ad hoc runtime object graphs
+
+So the backend split is:
+
+- pure phases: typed ASDL + LuaFun/FP transforms
+- LuaJIT leaf: typed FFI backend realization
+- Terra leaf: typed native backend realization
 
 ## Tradeoffs
 

@@ -511,6 +511,79 @@ This also means the entire testing infrastructure dissolves:
 - **No property testing library** — ASDL types define the space of valid inputs. Random testing is: random ASDL constructor arguments → call function → assert structural properties.
 - **No flaky tests** — pure functions produce the same output for the same input. Always.
 
+### 3.9 The memoize-hit-ratio test
+
+Once the pipeline exists, there is another extremely practical design test available:
+
+> **What percentage of memoized boundaries hit the cache during realistic edits?**
+
+This is not a backend-speed metric. It is a design-quality metric.
+
+If one small edit causes:
+
+- one or two local misses
+- a few expected parent misses
+- many sibling hits
+
+then the ASDL decomposition is probably healthy.
+
+If one small edit causes:
+
+- misses across most leaves
+- misses across unrelated siblings
+- misses at boundaries that should have been unaffected
+
+then the design is telling you something is wrong.
+
+Typical causes include:
+
+- structural sharing is broken (deep copy instead of `U.with`)
+- IDs are unstable
+- memoize keys include volatile data
+- a boundary is too coarse
+- a source node is carrying too much unrelated state
+- a phase is flattening away locality too early
+
+This is important because it turns architectural quality into an observable quantity.
+
+A high hit ratio means:
+
+- edits are local
+- identities are stable
+- phases are well scoped
+- the ASDL matches the natural incrementality of the domain
+
+A low hit ratio means the opposite.
+
+The especially useful metric is not only the global hit ratio, but **misses per edit**:
+
+- change one biquad frequency → how many boundaries miss?
+- mute one track → how many boundaries miss?
+- insert one paragraph → how many boundaries miss?
+
+That number is the architectural cost of one user action.
+
+In practice, it helps to give important boundaries explicit names so the inspector report is readable:
+
+- `U.transition("lower_track", fn)`
+- `U.terminal("compile_node", fn)`
+- `U.memo_measure_edit(...)`
+- `U.memo_report()`
+
+So once you have memoize instrumentation, treat the report as a design inspector:
+
+- **90%+ reuse** usually means the decomposition is excellent
+- **70–90% reuse** is often healthy but worth inspecting
+- **below 50% reuse** usually means the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
+
+There is one expected caveat: the root boundary often misses on every edit. That is normal. The real question is whether the leaves and intermediate structural boundaries are reusing their work.
+
+In other words:
+
+> **The cache hit ratio is the design-quality metric for incremental compilation.**
+
+Use it the same way you use the save/load test, the undo test, and the LuaFun test: not as a performance tweak, but as a diagnostic for whether the model and phase boundaries are right.
+
 ---
 
 ## 4. Type Design Principles

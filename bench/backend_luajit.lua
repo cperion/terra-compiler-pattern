@@ -16,6 +16,7 @@ ffi.cdef [[
 ]]
 
 local BLOCK = B.getenv_number("BENCH_BLOCK", 16384)
+local SMALL_BLOCK = B.getenv_number("BENCH_SMALL_BLOCK", 16)
 local WARMUP = B.getenv_number("BENCH_WARMUP", 64)
 local ITERS = B.getenv_number("BENCH_ITERS", 256)
 local COMPILE_ITERS = B.getenv_number("BENCH_COMPILE_ITERS", 64)
@@ -114,6 +115,32 @@ local function make_chain(seed)
     return nodes
 end
 
+local function make_gain_chain(seed)
+    local nodes = {}
+    for i = 1, CHAIN_LEN do
+        nodes[i] = make_gain(-0.25 - (((seed + i) % 9) * 0.5))
+    end
+    return nodes
+end
+
+local function edit_middle(nodes, seed)
+    local out = {}
+    local idx = math.floor((#nodes + 1) / 2)
+    for i = 1, #nodes do
+        if i == idx then
+            local old = nodes[i]
+            if old.kind == "biquad" then
+                out[i] = make_biquad(old.freq + 17 + seed, old.q)
+            else
+                out[i] = make_gain(old.db - 0.125)
+            end
+        else
+            out[i] = nodes[i]
+        end
+    end
+    return out
+end
+
 local function bench_compile(factory)
     local t0 = B.now_ns()
     local last
@@ -124,18 +151,43 @@ local function bench_compile(factory)
     return dt / COMPILE_ITERS, last
 end
 
-local function bench_exec(unit)
-    local src = ffi.new("float[?]", BLOCK)
-    local work = ffi.new("float[?]", BLOCK)
-    local bytes = ffi.sizeof("float") * BLOCK
+local function bench_compile_hit(factory, input)
+    local last = factory(input)
+    local t0 = B.now_ns()
+    for _ = 1, COMPILE_ITERS do
+        last = factory(input)
+    end
+    local dt = B.now_ns() - t0
+    return dt / COMPILE_ITERS, last
+end
+
+local function bench_compile_edit()
+    local total = 0
+    local last
+    for i = 1, COMPILE_ITERS do
+        local old_nodes = make_chain(i)
+        compile_chain(old_nodes, SAMPLE_RATE)
+        local new_nodes = edit_middle(old_nodes, i)
+        local t0 = B.now_ns()
+        last = compile_chain(new_nodes, SAMPLE_RATE)
+        total = total + (B.now_ns() - t0)
+    end
+    return total / COMPILE_ITERS, last
+end
+
+local function bench_exec(unit, block)
+    block = block or BLOCK
+    local src = ffi.new("float[?]", block)
+    local work = ffi.new("float[?]", block)
+    local bytes = ffi.sizeof("float") * block
     local state = unit.state_t ~= U.EMPTY and unit.state_t.alloc() or nil
 
-    B.fill_source(src, BLOCK)
+    B.fill_source(src, block)
 
     for _ = 1, WARMUP do
         ffi.copy(work, src, bytes)
         reset_instance(unit, state)
-        unit.fn(state, work, BLOCK)
+        unit.fn(state, work, block)
     end
 
     local t0 = B.now_ns()
@@ -149,14 +201,14 @@ local function bench_exec(unit)
     for _ = 1, ITERS do
         ffi.copy(work, src, bytes)
         reset_instance(unit, state)
-        unit.fn(state, work, BLOCK)
+        unit.fn(state, work, block)
     end
     local total = B.now_ns() - t0
 
     release_instance(unit, state)
 
     local net = math.max(0, total - baseline)
-    return net / (ITERS * BLOCK)
+    return net / (ITERS * block)
 end
 
 local compile_gain_ns = bench_compile(function(i)
@@ -171,13 +223,28 @@ local compile_chain_ns = bench_compile(function(i)
     return compile_chain(make_chain(i), SAMPLE_RATE)
 end)
 
-local exec_gain_ns = bench_exec(compile_gain(make_gain(-3.0), SAMPLE_RATE))
-local exec_biquad_ns = bench_exec(compile_biquad(make_biquad(1200.0, 0.707), SAMPLE_RATE))
-local exec_chain_ns = bench_exec(compile_chain(make_chain(1), SAMPLE_RATE))
+local compile_gain_chain_ns = bench_compile(function(i)
+    return compile_chain(make_gain_chain(i), SAMPLE_RATE)
+end)
+
+local chain_hit_nodes = make_chain(777)
+local compile_chain_hit_ns = bench_compile_hit(function(nodes)
+    return compile_chain(nodes, SAMPLE_RATE)
+end, chain_hit_nodes)
+
+local compile_chain_edit_ns = bench_compile_edit()
+
+local exec_gain_ns = bench_exec(compile_gain(make_gain(-3.0), SAMPLE_RATE), BLOCK)
+local exec_biquad_ns = bench_exec(compile_biquad(make_biquad(1200.0, 0.707), SAMPLE_RATE), BLOCK)
+local exec_chain_ns = bench_exec(compile_chain(make_chain(1), SAMPLE_RATE), BLOCK)
+local exec_gain_chain_ns = bench_exec(compile_chain(make_gain_chain(1), SAMPLE_RATE), BLOCK)
+local exec_chain_small_ns = bench_exec(compile_chain(make_chain(1), SAMPLE_RATE), SMALL_BLOCK)
+local exec_gain_chain_small_ns = bench_exec(compile_chain(make_gain_chain(1), SAMPLE_RATE), SMALL_BLOCK)
 
 B.print_metrics({
     backend = "luajit",
     block = BLOCK,
+    small_block = SMALL_BLOCK,
     warmup = WARMUP,
     iterations = ITERS,
     compile_iterations = COMPILE_ITERS,
@@ -185,7 +252,13 @@ B.print_metrics({
     compile_gain_avg_ns = compile_gain_ns,
     compile_biquad_avg_ns = compile_biquad_ns,
     compile_chain_avg_ns = compile_chain_ns,
+    compile_gain_chain_avg_ns = compile_gain_chain_ns,
+    compile_chain_hit_avg_ns = compile_chain_hit_ns,
+    compile_chain_edit_avg_ns = compile_chain_edit_ns,
     exec_gain_ns_per_sample = exec_gain_ns,
     exec_biquad_ns_per_sample = exec_biquad_ns,
     exec_chain_ns_per_sample = exec_chain_ns,
+    exec_gain_chain_ns_per_sample = exec_gain_chain_ns,
+    exec_chain_small_ns_per_sample = exec_chain_small_ns,
+    exec_gain_chain_small_ns_per_sample = exec_gain_chain_small_ns,
 })

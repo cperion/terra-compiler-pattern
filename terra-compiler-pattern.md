@@ -144,7 +144,9 @@ In LuaJIT, terminal realization is more implicit, but still real:
 - produce stable specialized closures
 - capture compile-time-known values as upvalues
 - shape composition so traces stay simple
-- represent state in a layout the runtime can access cheaply
+- represent state in a typed FFI/cdata layout the runtime can access cheaply
+
+The crucial constraint is that the leaf must still be fully lowered. No opaque runtime tables. No ad hoc object graphs. No dynamic interpreter hiding in the callback. The typed source program must narrow all the way down to a monomorphic LuaJIT + FFI leaf, just as a Terra backend narrows all the way down to native code + native layout.
 
 In both cases, the architectural move is the same. The difference is in the backend realization strategy.
 
@@ -223,6 +225,8 @@ LuaJIT should be the default backend on JIT-native platforms because:
 - scalar steady-state performance is highly competitive
 - the same architecture applies cleanly
 - the host runtime is already doing much of the backend work
+
+But that does **not** mean LuaJIT is the permissive dynamic-tables backend. The backend contract is still strict. Pure phases remain typed ASDL + LuaFun-style transforms. Terminal leaves must lower to monomorphic LuaJIT code over typed FFI/cdata-backed state and payload layouts.
 
 Terra then becomes the explicit strong backend when you need what only Terra gives clearly and reliably:
 
@@ -379,11 +383,20 @@ A terminal is a pure, memoized boundary that takes a phase-local node and produc
 
 This is where the architecture stops being purely descriptive and becomes operational.
 
-The terminal says:
+The terminal should be understood in two layers:
+
+1. it first defines the canonical machine immediately above `Unit`:
+   - `gen`
+   - `param`
+   - `state`
+2. backend realization then packages that machine as `Unit { fn, state_t }`
+
+So the terminal says:
 
 - this part of the program is now concrete enough
 - here is the specialized machine that performs it
-- here is the state ownership required to run it
+- here is the stable machine input it reads
+- here is the runtime state ownership required to run it
 
 Depending on backend, this may mean:
 
@@ -2174,15 +2187,25 @@ This is the most explicit realization of the idea.
 
 #### LuaJIT realization
 
-On LuaJIT, that may mean:
+On LuaJIT, that should mean something just as strict in architectural terms:
 
-- `fn` is a specialized Lua closure
-- `state_t` is a runtime layout descriptor or FFI-backed state plan
-- `compose` creates a structural state arrangement that child closures can access predictably
+- `fn` is a specialized monomorphic Lua function
+- `state_t` is a typed FFI/cdata-backed layout
+- `compose` creates a structural typed state arrangement that child functions access predictably
 - installation/hot-swap uses the host runtime rather than an explicit LLVM-native pipeline
 
-This is a different realization, but still the same architectural role.
+The important point is that LuaJIT is **not** the permissive dynamic-tables backend.
+The same Unit contract still applies.
+The same type pressure still applies.
+The types are not ornamental metadata around the runtime; they are the runtime shape that the compiled function actually executes over.
 
+So the intended split is:
+
+- pure phases operate on ASDL-defined typed values
+- LuaJIT leaves operate on backend-native typed FFI layouts
+- no opaque runtime tables belong in the designed execution model
+
+This is a different realization, but still the same architectural role.
 That is exactly why the backend-neutral reframing works.
 The Unit contract survives the backend change.
 
@@ -2267,6 +2290,76 @@ Poor examples for `state_t` would be things that really belong in source or in a
 - derived semantic facts that should have been attached structurally before terminalization
 
 The Unit boundary should be reached only after the machine's semantic shape is sufficiently concrete.
+
+### The canonical machine above `Unit`
+
+`Unit { fn, state_t }` is the packaged runtime artifact, but it is not the first machine concept.
+The canonical machine layer immediately above that packaging is:
+
+- `gen` = the execution rule / code-shaping part
+- `param` = the stable machine input it reads
+- `state` = the mutable runtime-owned state it preserves
+
+This is not an optional explanatory trick. It is the right way to think about terminal design in this pattern.
+Many terminal design mistakes come from compressing those three questions too early.
+A leaf may look awkward not because `Unit` is the wrong contract, but because the phase above it is not making `gen`, `param`, and `state` obvious enough.
+
+A good Machine IR above that canonical machine is therefore not just "more data". It should be understood as the **typed machine-feeding layer** that makes the machine's compiled wiring explicit.
+
+In practical terms, a good Machine IR should answer five things directly:
+
+1. **order**
+   - what loops exist?
+   - what spans or ranges are executed?
+   - what headers determine one execution slice?
+
+2. **addressability**
+   - how does execution reach what it needs?
+   - what refs, slots, indices, or handles are already resolved?
+
+3. **use-sites**
+   - what concrete occurrences are executed?
+   - what instances of drawing, querying, routing, or processing exist?
+
+4. **resource identity**
+   - what realizable resources may need runtime ownership?
+   - what stable resource specifications identify them?
+
+5. **runtime ownership requirements**
+   - what mutable runtime state must persist?
+   - what state schema does the machine require?
+
+That is a more useful way to think about Machine IR than calling it merely a planning layer or a packed payload. Its job is to make `gen`, `param`, and `state` trivial to derive by making machine-facing order, access, instances, resource identity, and state needs explicit.
+
+That does **not** mean introducing a generic interpreted wiring DSL. The pattern should not devolve into runtime nodes like `Accessor(kind, ...)`, `Processor(kind, ...)`, or `Emitter(kind, ...)` that execution must interpret dynamically. That would simply recreate the accidental interpreter at a different layer.
+
+Instead, the wiring should already have been compiled into ordinary typed shapes the machine can consume directly, such as:
+
+- spans and ranges
+- headers and closed dispatch records
+- slot/index refs
+- instance/use-site records
+- resource specifications
+- runtime state schemas
+
+In that sense, "querying" still belongs above execution — but only after it has been compiled into typed access paths. Good querying here means:
+
+- read slot `i`
+- read span `[start, count]`
+- read pre-resolved clip/index/resource refs
+
+Not:
+
+- search the world
+- walk a tree looking for meaning
+- chase IDs at runtime
+- rediscover semantic structure in the hot path
+
+This is the practical test for Machine IR and terminal input design:
+
+> does the machine receive explicit order, addressability, use-sites, resource identity, and persistent state needs — or does it still have to invent them while running?
+
+If it still has to invent them, the ASDL and phase structure above the terminal are still too high-level.
 
 ### Leaf-driven constraints show up here clearly
 
@@ -2756,15 +2849,16 @@ A compact picture looks like this:
 │                 YOUR DOMAIN                   │
 │                                               │
 │  source ASDL, Event ASDL, Apply,              │
-│  phase structure, projections, terminal       │
+│  phase structure, projections, Machine IR     │
 │  intent, domain semantics                     │
 │                                               │
 │  This is your application.                    │
 ├───────────────────────────────────────────────┤
 │               THE PATTERN                     │
 │                                               │
-│  Unit, transition, terminal, memoize,         │
-│  match, with, fallback, errors, inspect       │
+│  Unit, gen/param/state, transition,           │
+│  terminal, memoize, match, with,              │
+│  fallback, errors, inspect                    │
 │                                               │
 │  This is the compiler architecture vocabulary │
 │  used to express the app.                     │
@@ -2792,6 +2886,7 @@ This includes:
 - the Apply reducer
 - the real phases that consume unresolved knowledge
 - any view projections from source into presentation forms
+- the Machine IRs you want the compiler to reach
 - the semantic meaning of the application's nouns and variants
 - the terminal inputs you want the compiler to reach
 
@@ -2818,6 +2913,8 @@ The pattern layer is the reusable compiler-shaped vocabulary used to express the
 
 This includes concepts and helpers such as:
 
+- the canonical `gen, param, state` machine split
+- Machine IR as the typed machine-feeding layer
 - `Unit`
 - `transition`
 - `terminal`
@@ -2833,7 +2930,8 @@ This layer is not the app's semantics, but it gives the app a disciplined way to
 It says, in effect:
 
 - this boundary narrows ASDL to ASDL
-- this boundary lowers ASDL to Unit
+- this boundary lowers ASDL to Machine IR or to `Unit`
+- this is how machine order/access/state become explicit
 - this is how sum types are matched exhaustively
 - this is how structural updates are represented
 - this is how partial failures can stay local
@@ -3232,10 +3330,13 @@ On LuaJIT, that objective can be met by terminal code that:
 - closes over compile-time-known facts
 - chooses fixed operator families ahead of time
 - avoids data-dependent variant dispatch in hot loops
-- accesses state through stable predictable layouts
+- accesses state through stable predictable typed FFI layouts
 - composes child operations in simple linear or structural forms that trace well
+- consumes rich semantic structure before execution rather than interpreting it in the callback
 
 That is a very good match for the architecture.
+
+A useful way to think about this is to look at libraries like `fun.lua`. Their performance does not come from treating Lua as a free-form dynamic object world. It comes from normalizing many rich surface forms into one tiny regular execution protocol. Good LuaJIT leaves should do the same thing: lower rich typed phase data into a tiny canonical machine that the JIT can trace aggressively.
 
 The terminal is still doing real compiler work. It is just targeting the optimization strengths of the host JIT rather than an explicit LLVM-native path.
 
@@ -3291,11 +3392,14 @@ That means designing terminals and composition around questions like:
 - are the hot loops monomorphic?
 - are important constants captured rather than looked up dynamically?
 - is state access predictable and cheap?
+- is that state realized as typed FFI/cdata layout rather than opaque tables?
+- is live payload realized as typed FFI/cdata layout rather than opaque tables?
 - is child composition shaped so traces stay stable?
 - are wide domain sum types consumed before execution?
 - is the closure/code graph simple enough for the JIT to understand?
 
 These are not secondary implementation details. They are the LuaJIT form of the backend compiler story.
+And they are exactly how LuaJIT can impose nearly the same design pressure as Terra: if the leaf still wants arbitrary tables, missing-field checks, tag strings, or interpreter-style tree walking, then the lowering is not finished.
 
 ### A concrete mental shift
 
@@ -3829,6 +3933,61 @@ This is one reason the pattern can feel refreshing: performance debugging often 
 
 A good way to think about the system is as balancing two costs.
 
+### Memoize hit ratio is a design metric
+
+There is also a highly practical metric that sits between modeling and performance:
+
+> **the memoize hit ratio at real stage boundaries**
+
+This metric matters because it measures the architecture more directly than raw throughput does.
+
+If one small edit causes:
+
+- a few local misses
+- many sibling hits
+- misses mostly at the edited subtree and its expected parents
+
+then the ASDL decomposition is probably healthy.
+
+If one small edit causes:
+
+- misses across unrelated leaves
+- misses across most siblings
+- widespread recompilation after local edits
+
+then the architecture is telling you that something is wrong.
+
+Typical causes are:
+
+- broken structural sharing
+- unstable IDs
+- memoize keys that include volatile data
+- boundaries that are too coarse
+- phases that flatten away locality too early
+
+That is why memoize instrumentation is so valuable. It lets you ask not just "how fast is this backend?" but also:
+
+- how much work did this edit really cause?
+- which boundaries miss too often?
+- are leaves being reused the way the model claims they should be?
+
+In practice, the runtime now supports optional named boundaries plus a shared inspector interface:
+
+- `U.memoize("name", fn)`
+- `U.transition("name", fn)`
+- `U.terminal("name", fn)`
+- `U.memo_stats(boundary_fn)`
+- `U.memo()`
+- `U.memo_report()`
+- `U.memo_quality()`
+- `U.memo_diagnose()`
+- `U.memo_measure_edit(description, fn)`
+
+That gives `Unit` a pleasant top-level inspection surface instead of forcing callers to assemble a separate diagnostics object every time.
+
+In other words, the cache hit ratio is not just a runtime statistic.
+It is a design-quality inspector for the ASDL and the phase structure.
+
 #### 1. Rebuild cost
 This is the cost paid when the source program changes.
 
@@ -3903,9 +4062,14 @@ That balance may differ across subsystems.
 
 One of the most useful performance questions at the terminal boundary is:
 
-> what should be baked into the machine, and what should remain live in `state_t`?
+> what should shape `gen`, what should remain stable in `param`, and what should remain mutable in `state_t`?
 
 This is a central optimization question in the pattern.
+The older shorthand of "bake vs live" is still useful, but the fuller machine split is usually clearer:
+
+- bake into `gen` when code shape should change
+- keep in `param` when the machine should read stable execution data
+- keep in `state_t` when runtime ownership and mutation are genuinely required
 
 #### Bake into the machine when:
 - the fact is compile-time-known for the subtree
@@ -4776,7 +4940,7 @@ That program is represented explicitly as source ASDL.
 Inputs are represented explicitly as an Event ASDL.
 Apply computes the next version of the source program.
 Transitions consume unresolved knowledge across real phases.
-Terminals realize phase-local nodes as executable Units.
+Terminals first define the canonical `gen, param, state` machine for phase-local nodes, then backend realization packages that machine as executable Units.
 Execution runs those Units until the source changes again.
 
 That is the pattern.
@@ -4785,7 +4949,7 @@ That is the pattern.
 
 If the whole document had to collapse to one sentence, it would be this:
 
-> The compiler pattern treats interactive software as a live compiler: the user's domain program is modeled explicitly as source ASDL, evolved by a pure event reducer, narrowed across memoized phases, and repeatedly realized into specialized Units that run until the program changes again.
+> The compiler pattern treats interactive software as a live compiler: the user's domain program is modeled explicitly as source ASDL, evolved by a pure event reducer, narrowed across memoized phases into typed Machine IRs that make machine order, access, instances, resource identity, and state requirements explicit, compiled into canonical `gen, param, state` machines, and repeatedly packaged as specialized Units that run until the program changes again.
 
 That sentence now says the important part first.
 
@@ -4854,12 +5018,18 @@ That is one of the pattern's most important guardrails against drifting back int
 
 The `Unit` is the architectural handoff between those two levels.
 
-A `Unit` pairs:
+Immediately above that handoff is the canonical machine layer:
 
-- specialized behavior
+- `gen`
+- `param`
+- `state`
+
+And `Unit` packages that machine as:
+
+- specialized realized behavior
 - owned runtime state layout
 
-and composes structurally the same way the source program composes structurally.
+The resulting artifact still composes structurally the same way the source program composes structurally.
 
 This is why the Unit concept matters so much:
 
@@ -4885,6 +5055,8 @@ The stable center is:
 - Event ASDL
 - Apply
 - phase structure
+- Machine IR
+- canonical `gen, param, state`
 - terminals
 - Units
 - memoized incremental recompilation
@@ -4903,11 +5075,13 @@ The application's actual semantics:
 - reducer
 - phases
 - projections
-- terminal intent
+- Machine IRs and terminal intent
 
 #### 2. Pattern layer
 The reusable compiler vocabulary:
 
+- canonical `gen, param, state` machine thinking
+- Machine IR as the typed machine-feeding layer
 - Unit
 - transition
 - terminal
@@ -4988,6 +5162,12 @@ That is why a good mental model is:
 Or more sharply:
 
 > designing with Terra in mind makes the right structure simple and makes bad structure hard to miss.
+
+But once the LuaJIT backend is constrained correctly, a second statement also becomes true:
+
+> strict LuaJIT can impose almost the same architectural pressure, because the leaf must still end as `Unit { fn, state_t }` over typed backend-native layout.
+
+The difference is that Terra provides stronger mechanical enforcement through explicit native staging, while LuaJIT provides the same pressure only if the backend rules are kept strict.
 
 This is one of Terra's enduring architectural values.
 
