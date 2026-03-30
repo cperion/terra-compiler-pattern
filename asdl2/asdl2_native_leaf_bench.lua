@@ -134,13 +134,13 @@ local function sum_row(seed)
     )
 end
 
-local function build_machine(seed)
+local function build_luajit(seed)
     return T.Asdl2Lowered.Schema(
         L{ product_record(seed), unique_product_record(seed), handle_record(seed), variant_record(seed) },
         L{ sum_row(seed) },
         L{ T.Asdl2Lowered.ScalarArenaSlot(1, T.Asdl2Lowered.BuiltinCheck(KS("number")), KS(UINT32)) },
         L{ T.Asdl2Lowered.CacheSlot(1, C(T.Asdl2Lowered.StructuralKind), 2, KS("BenchNative" .. tostring(seed) .. ".U")) }
-    ):define_machine()
+    ):define_machine():lower_luajit()
 end
 
 local function new_ctx()
@@ -153,8 +153,8 @@ local install_iters = math.max(1, math.floor(getenv_number("ASDL2_NATIVE_INSTALL
 local hot_iters = math.max(1, math.floor(getenv_number("ASDL2_NATIVE_HOT_ITERS", 2000000)))
 
 local base_seed = 1
-local base_machine = build_machine(base_seed)
-local base_ctx = Leaf.install(base_machine, new_ctx())
+local base_luajit = build_luajit(base_seed)
+local base_ctx = Leaf.install(base_luajit, new_ctx())
 local P = base_ctx[KS("BenchNative1.P")]
 local Urec = base_ctx[KS("BenchNative1.U")]
 local H = base_ctx[KS("BenchNative1.H")]
@@ -173,7 +173,7 @@ assert(Ssum:isclassof(a))
 print(string.format("asdl2 native leaf bench install_iters=%d hot_iters=%d", install_iters, hot_iters))
 
 local install_existing_ns, sink1 = bench_avg_ns(install_iters, function()
-    local ctx = Leaf.install(base_machine, base_ctx)
+    local ctx = Leaf.install(base_luajit, base_ctx)
     return ctx[KS("BenchNative1.P")] ~= nil and 1 or 0
 end)
 report("install_existing", install_existing_ns, sink1)
@@ -181,7 +181,7 @@ report("install_existing", install_existing_ns, sink1)
 local distinct_pool = {}
 local ctx_pool = {}
 for i = 1, install_iters + 64 do
-    distinct_pool[i] = build_machine(i + 1000)
+    distinct_pool[i] = build_luajit(i + 1000)
     ctx_pool[i] = new_ctx()
 end
 local next_idx = 0

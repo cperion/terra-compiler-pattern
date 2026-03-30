@@ -42,7 +42,6 @@ local optional_check_cache = setmetatable({}, { __mode = "k" })
 local list_check_cache = setmetatable({}, { __mode = "k" })
 local exact_class_check_cache = {}
 local sum_family_check_cache = {}
-local UINT32 = "uint32_t"
 
 local function S(v)
     return v
@@ -151,21 +150,6 @@ end
 
 local function key_for_cache(v)
     return v == nil and nilkey or v
-end
-
-local function sanitize(name)
-    return (name:gsub("[^%w_]", "_"))
-end
-
-local function ctype_name_for_fqname(fqname)
-    return "asdl2_" .. sanitize(S(fqname))
-end
-
-local function schema_parts(schema)
-    if schema.param ~= nil and schema.state ~= nil then
-        return schema.param.records, schema.param.sums, schema.state.arenas, schema.state.caches
-    end
-    return schema.records, schema.sums, schema.arenas, schema.caches
 end
 
 local function make_value_arena(kind)
@@ -293,7 +277,7 @@ local function sum_family_check(family_id)
 end
 
 local function build_record_cdef(record)
-    local ctype_name = ctype_name_for_fqname(record.header.fqname)
+    local ctype_name = S(record.ctype_name)
     local fields = record.fields
     local n = #fields
     local lines = {
@@ -311,12 +295,12 @@ local function build_record_cdef(record)
     for i = 1, n do
         local field = fields[i]
         local kind = field.kind
-        if kind == "InlineField" then
-            lines[#lines + 1] = "  " .. field.c_type .. " " .. field.c_name .. ";"
-        elseif kind == "HandleScalarField" or kind == "HandleListField" then
+        if kind == "InlineFieldPlan" then
+            lines[#lines + 1] = "  " .. field.c_type .. " " .. field.slot_name .. ";"
+        elseif kind == "HandleScalarFieldPlan" or kind == "HandleListFieldPlan" then
             lines[#lines + 1] = "  " .. field.handle_ctype .. " " .. field.handle_field .. ";"
         else
-            error("asdl2_native_leaf_luajit: unknown field kind " .. tostring(kind), 2)
+            error("asdl2_native_leaf_luajit: unknown field plan kind " .. tostring(kind), 2)
         end
     end
     lines[#lines + 1] = "} " .. ctype_name .. ";"
@@ -414,31 +398,96 @@ local function arena_for_instance(class, self, arena_id)
     return arena
 end
 
-local function install_field_runtime(class)
-    if class.__has_handle_fields then
-        class.__index = function(self, key)
-            local value = rawget(class, key)
-            if value ~= nil then return value end
-            local handle_field = class.__handle_field_by_name[key]
-            if handle_field == nil then return nil end
-            local arena = arena_for_instance(class, self, class.__handle_arena_id_by_name[key])
-            return arena_value(arena, self[handle_field])
-        end
+local function scalar_check_base(ctx, plan)
+    local kind = K(plan)
+    if kind == "AnyScalarCheck" or kind == "AnyOptionalCheck" or kind == "AnyListCheck" then
+        return builtin_checks.any
+    elseif kind == "BuiltinScalarCheck" or kind == "BuiltinOptionalCheck" or kind == "BuiltinListCheck" then
+        local name = S(plan.name)
+        return assert(builtin_checks[name], "unknown builtin check: " .. tostring(name))
+    elseif kind == "ExternalScalarCheck" or kind == "ExternalOptionalCheck" or kind == "ExternalListCheck" then
+        local name = S(plan.fqname)
+        return assert(ctx.extern_checks[name], "unknown extern check: " .. tostring(name))
+    elseif kind == "ExactClassScalarCheck" or kind == "ExactClassOptionalCheck" or kind == "ExactClassListCheck" then
+        return exact_class_check(plan.class_id)
+    elseif kind == "SumFamilyScalarCheck" or kind == "SumFamilyOptionalCheck" or kind == "SumFamilyListCheck" then
+        return sum_family_check(plan.family_id)
+    end
+    error("asdl2_native_leaf_luajit: unknown check plan kind " .. tostring(kind), 2)
+end
 
-        class.__newindex = function(self, key, value)
-            local handle_field = class.__handle_field_by_name[key]
-            if handle_field == nil then
-                error("asdl2_native_leaf_luajit: cannot assign unknown field '" .. tostring(key) .. "' on " .. tostring(class.__name), 2)
-            end
-            local check = class.__handle_check_by_name[key]
-            if not check(value) then
-                error(string.format("bad assignment to '%s.%s' expected '%s'", class.__name, key, class.__handle_type_name_by_name[key]), 2)
-            end
-            local arena = arena_for_instance(class, self, class.__handle_arena_id_by_name[key])
-            self[handle_field] = arena_intern(arena, value)
-        end
-    else
+local function check_plan_fn(ctx, plan)
+    local kind = K(plan)
+    local scalar = scalar_check_base(ctx, plan)
+    if kind == "AnyScalarCheck" or kind == "BuiltinScalarCheck" or kind == "ExternalScalarCheck"
+        or kind == "ExactClassScalarCheck" or kind == "SumFamilyScalarCheck" then
+        return scalar
+    end
+    if kind == "AnyOptionalCheck" or kind == "BuiltinOptionalCheck" or kind == "ExternalOptionalCheck"
+        or kind == "ExactClassOptionalCheck" or kind == "SumFamilyOptionalCheck" then
+        return checkoptional(scalar)
+    end
+    if kind == "AnyListCheck" or kind == "BuiltinListCheck" or kind == "ExternalListCheck"
+        or kind == "ExactClassListCheck" or kind == "SumFamilyListCheck" then
+        return checklist(scalar)
+    end
+    error("asdl2_native_leaf_luajit: unknown check plan kind " .. tostring(kind), 2)
+end
+
+local function install_access_runtime(class, record, compiled_fields)
+    local kind = K(record.access)
+    if kind == "InlineOnlyAccess" then
+        class.__has_handle_fields = false
+        class.__handle_field_by_name = nil
+        class.__handle_arena_id_by_name = nil
+        class.__handle_type_name_by_name = nil
+        class.__handle_check_by_name = nil
         class.__index = class
+        class.__newindex = nil
+        return
+    end
+
+    local by_name = {}
+    local arena_by_name = {}
+    local type_by_name = {}
+    local check_by_name = {}
+    local field_ixs = record.access.field_ixs
+
+    for i = 1, #field_ixs do
+        local field = compiled_fields[field_ixs[i]]
+        local name = field.name
+        by_name[name] = field.handle_field
+        arena_by_name[name] = field.arena_id
+        type_by_name[name] = field.display_type
+        check_by_name[name] = field.check
+    end
+
+    class.__has_handle_fields = true
+    class.__handle_field_by_name = by_name
+    class.__handle_arena_id_by_name = arena_by_name
+    class.__handle_type_name_by_name = type_by_name
+    class.__handle_check_by_name = check_by_name
+
+    class.__index = function(self, key)
+        local value = rawget(class, key)
+        if value ~= nil then return value end
+        local handle_field = by_name[key]
+        if handle_field == nil then return nil end
+        local arena = arena_for_instance(class, self, arena_by_name[key])
+        return arena_value(arena, self[handle_field])
+    end
+
+    class.__newindex = function(self, key, value)
+        local handle_field = by_name[key]
+        if handle_field == nil then
+            error("asdl2_native_leaf_luajit: cannot assign unknown field '" .. tostring(key) .. "' on " .. tostring(class.__name), 2)
+        end
+        local check = check_by_name[key]
+        if not check(value) then
+            error(string.format("bad assignment to '%s.%s' expected '%s'", class.__name, key, type_by_name[key]), 2)
+        end
+        local arena = arena_for_instance(class, self, arena_by_name[key])
+        self[handle_field] = arena_intern(arena, value)
     end
 end
 
@@ -456,191 +505,57 @@ local function install_class_runtime(class)
     })
 end
 
-local function build_bound_ctor(ctx, record, class, state, context_id)
-    local header = record.header
-    local n = #record.fields
-    local checks = class.__field_checks_ordered
-    local inline_flags = class.__field_inline_ordered
-    local type_names = class.__field_type_name_ordered
-    local slot_names = class.__field_slot_name_ordered
-    local handle_fields = class.__field_handle_field_ordered
-    local arena_ids = class.__field_arena_id_ordered
-    local arenas = nil
-    local cache_kind = K(record.cache)
-    local cache = (cache_kind ~= "NoCacheRef") and state.caches[record.cache.cache_id] or nil
+local function cache_runtime(state, cache_plan)
+    local kind = K(cache_plan)
+    if kind == "NoCachePlan" then return nil end
+    if kind == "SingletonCachePlan" then return state.caches[cache_plan.cache_id] end
+    if kind == "StructuralCachePlan" then return state.caches[cache_plan.cache_id] end
+    error("asdl2_native_leaf_luajit: unknown cache plan kind " .. tostring(kind), 2)
+end
+
+local function compile_field(ctx, field, state)
+    local kind = K(field)
+    local info = {
+        kind = kind,
+        check = check_plan_fn(ctx, field.check),
+        display_type = S(field.display_type),
+    }
+    if kind == "InlineFieldPlan" then
+        info.inline = true
+        info.slot_name = S(field.slot_name)
+        return info
+    end
+    info.inline = false
+    info.name = S(field.name)
+    info.handle_field = S(field.handle_field)
+    info.arena_id = field.arena_id
+    info.arena = state.arenas[field.arena_id]
+    return info
+end
+
+local function compile_runtime_fields(ctx, record, state)
+    local fields = record.fields
+    local out = {}
+    for i = 1, #fields do out[i] = compile_field(ctx, fields[i], state) end
+    return out
+end
+
+local function build_generic_ctor(class, record, compiled_fields, state, context_id)
+    local arg_ixs = record.ctor.arg_ixs
+    local args = {}
+    for i = 1, #arg_ixs do args[i] = compiled_fields[arg_ixs[i]] end
+    local n = #args
+    local cache = cache_runtime(state, record.ctor.cache)
+    local header = class.__header
     local ctor = class.__ctor
     local class_name = class.__name
 
-    for i = 1, n do
-        local arena_id = arena_ids[i]
-        if arena_id ~= nil then
-            if arenas == nil then arenas = {} end
-            local arena = state.arenas[arena_id]
-            if arena == nil then
-                error("asdl2_native_leaf_luajit: missing arena_id '" .. tostring(arena_id) .. "' for " .. tostring(class_name), 2)
-            end
-            arenas[i] = arena
-        end
-    end
-
-    local is_variant = K(record) == "VariantRecord"
-    local class_id = header.class_id
-    local family_id = is_variant and header.family_id or 0
-    local variant_tag = is_variant and header.variant_tag or 0
-
     local function init_obj(obj)
-        obj.class_id = class_id
-        obj.family_id = family_id
-        obj.variant_tag = variant_tag
+        obj.class_id = header.class_id
+        obj.family_id = header.family_id or 0
+        obj.variant_tag = header.variant_tag or 0
         obj.context_id = context_id
         return obj
-    end
-
-    if n == 0 then
-        if cache_kind ~= "NoCacheRef" and cache ~= nil and cache.kind == "singleton" then
-            return function(_)
-                if cache.present then return cache.value end
-                local obj = init_obj(ctor())
-                cache.present = true
-                cache.value = obj
-                return obj
-            end
-        end
-        return function(_)
-            return init_obj(ctor())
-        end
-    end
-
-    if n == 1 then
-        local check1 = checks[1]
-        local inline1 = inline_flags[1]
-        local type1 = type_names[1]
-        local slot1 = slot_names[1]
-        local handle1 = handle_fields[1]
-        if cache_kind == "NoCacheRef" and inline1 then
-            return function(_, a1)
-                if not check1(a1) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                end
-                local obj = init_obj(ctor())
-                obj[slot1] = a1
-                return obj
-            end
-        elseif cache_kind == "NoCacheRef" then
-            local arena1 = arenas[1]
-            if arena1.kind == "value" then
-                local by_value = arena1.by_value
-                local values = arena1.values
-                return function(_, a1)
-                    if not check1(a1) then
-                        error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                    end
-                    local obj = init_obj(ctor())
-                    if a1 == nil then
-                        obj[handle1] = 0
-                        return obj
-                    end
-                    local handle = by_value[a1]
-                    if handle == nil then
-                        handle = arena1.next_handle
-                        arena1.next_handle = handle + 1
-                        by_value[a1] = handle
-                        values[handle] = a1
-                    end
-                    obj[handle1] = handle
-                    return obj
-                end
-            end
-            return function(_, a1)
-                if not check1(a1) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                end
-                local obj = init_obj(ctor())
-                obj[handle1] = arena_intern(arena1, arena_normalize(arena1, a1))
-                return obj
-            end
-        elseif inline1 then
-            if cache == nil then
-                error("asdl2_native_leaf_luajit: missing cache for " .. tostring(class_name), 2)
-            end
-            if cache.kind == "singleton" then
-                return function(_, a1)
-                    if not check1(a1) then
-                        error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                    end
-                    if cache.present then return cache.value end
-                    local obj = init_obj(ctor())
-                    obj[slot1] = a1
-                    cache.present = true
-                    cache.value = obj
-                    return obj
-                end
-            end
-            local root = cache.root
-            return function(_, a1)
-                if not check1(a1) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                end
-                local key1 = key_for_cache(a1)
-                local existing = root[key1]
-                if existing ~= nil then return existing end
-                local obj = init_obj(ctor())
-                obj[slot1] = a1
-                root[key1] = obj
-                return obj
-            end
-        end
-    elseif n == 2 then
-        local check1 = checks[1]
-        local check2 = checks[2]
-        local inline1 = inline_flags[1]
-        local inline2 = inline_flags[2]
-        local type1 = type_names[1]
-        local type2 = type_names[2]
-        local slot1 = slot_names[1]
-        local slot2 = slot_names[2]
-        if cache_kind == "NoCacheRef" and inline1 and inline2 then
-            return function(_, a1, a2)
-                if not check1(a1) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                end
-                if not check2(a2) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 2, class_name, type2), 2)
-                end
-                local obj = init_obj(ctor())
-                obj[slot1] = a1
-                obj[slot2] = a2
-                return obj
-            end
-        elseif inline1 and inline2 then
-            if cache == nil then
-                error("asdl2_native_leaf_luajit: missing cache for " .. tostring(class_name), 2)
-            end
-            local root = cache.root
-            return function(_, a1, a2)
-                if not check1(a1) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, type1), 2)
-                end
-                if not check2(a2) then
-                    error(string.format("bad argument #%d to '%s' expected '%s'", 2, class_name, type2), 2)
-                end
-                local key1 = key_for_cache(a1)
-                local key2 = key_for_cache(a2)
-                local node = root[key1]
-                if node ~= nil then
-                    local existing = node[key2]
-                    if existing ~= nil then return existing end
-                else
-                    node = {}
-                    root[key1] = node
-                end
-                local obj = init_obj(ctor())
-                obj[slot1] = a1
-                obj[slot2] = a2
-                node[key2] = obj
-                return obj
-            end
-        end
     end
 
     return function(_, ...)
@@ -651,45 +566,190 @@ local function build_bound_ctor(ctx, record, class, state, context_id)
 
         local values = {}
         for i = 1, n do
+            local info = args[i]
             local v = select(i, ...)
-            if not checks[i](v) then
-                error(string.format("bad argument #%d to '%s' expected '%s'", i, class_name, type_names[i]), 2)
+            if not info.check(v) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", i, class_name, info.display_type), 2)
             end
-            values[i] = inline_flags[i] and v or arena_normalize(arenas[i], v)
+            if info.inline then values[i] = v else values[i] = arena_normalize(info.arena, v) end
         end
 
-        if cache_kind ~= "NoCacheRef" then
-            if cache == nil then
-                error("asdl2_native_leaf_luajit: missing cache for " .. tostring(class_name), 2)
-            end
+        if cache ~= nil then
             local existing = cache_get(cache, values, n)
             if existing ~= nil then return existing end
             local obj = init_obj(ctor())
             for i = 1, n do
-                if inline_flags[i] then
-                    obj[slot_names[i]] = values[i]
-                else
-                    obj[handle_fields[i]] = arena_intern(arenas[i], values[i])
-                end
+                local info = args[i]
+                if info.inline then obj[info.slot_name] = values[i] else obj[info.handle_field] = arena_intern(info.arena, values[i]) end
             end
             return cache_put(cache, values, n, obj)
         end
 
         local obj = init_obj(ctor())
         for i = 1, n do
-            if inline_flags[i] then
-                obj[slot_names[i]] = values[i]
-            else
-                obj[handle_fields[i]] = arena_intern(arenas[i], values[i])
-            end
+            local info = args[i]
+            if info.inline then obj[info.slot_name] = values[i] else obj[info.handle_field] = arena_intern(info.arena, values[i]) end
         end
         return obj
     end
 end
 
+local function build_bound_ctor(record, class, compiled_fields, state, context_id)
+    local plan = record.ctor
+    local kind = K(plan)
+    local ctor = class.__ctor
+    local header = class.__header
+    local class_name = class.__name
+    local fields = compiled_fields
+
+    local function init_obj(obj)
+        obj.class_id = header.class_id
+        obj.family_id = header.family_id or 0
+        obj.variant_tag = header.variant_tag or 0
+        obj.context_id = context_id
+        return obj
+    end
+
+    if kind == "NullaryCtorNoCache" then
+        return function(_)
+            return init_obj(ctor())
+        end
+    end
+
+    if kind == "NullaryCtorSingletonCache" then
+        local cache = state.caches[plan.cache_id]
+        return function(_)
+            if cache.present then return cache.value end
+            local obj = init_obj(ctor())
+            cache.present = true
+            cache.value = obj
+            return obj
+        end
+    end
+
+    if kind == "Inline1CtorNoCache" then
+        local a1 = fields[plan.arg1_ix]
+        return function(_, v1)
+            if not a1.check(v1) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+            end
+            local obj = init_obj(ctor())
+            obj[a1.slot_name] = v1
+            return obj
+        end
+    end
+
+    if kind == "Inline1CtorStructuralCache" then
+        local a1 = fields[plan.arg1_ix]
+        local cache = state.caches[plan.cache_id]
+        local root = cache.root
+        return function(_, v1)
+            if not a1.check(v1) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+            end
+            local key1 = key_for_cache(v1)
+            local existing = root[key1]
+            if existing ~= nil then return existing end
+            local obj = init_obj(ctor())
+            obj[a1.slot_name] = v1
+            root[key1] = obj
+            return obj
+        end
+    end
+
+    if kind == "Inline2CtorNoCache" then
+        local a1 = fields[plan.arg1_ix]
+        local a2 = fields[plan.arg2_ix]
+        return function(_, v1, v2)
+            if not a1.check(v1) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+            end
+            if not a2.check(v2) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 2, class_name, a2.display_type), 2)
+            end
+            local obj = init_obj(ctor())
+            obj[a1.slot_name] = v1
+            obj[a2.slot_name] = v2
+            return obj
+        end
+    end
+
+    if kind == "Inline2CtorStructuralCache" then
+        local a1 = fields[plan.arg1_ix]
+        local a2 = fields[plan.arg2_ix]
+        local cache = state.caches[plan.cache_id]
+        local root = cache.root
+        return function(_, v1, v2)
+            if not a1.check(v1) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+            end
+            if not a2.check(v2) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 2, class_name, a2.display_type), 2)
+            end
+            local key1 = key_for_cache(v1)
+            local key2 = key_for_cache(v2)
+            local node = root[key1]
+            if node ~= nil then
+                local existing = node[key2]
+                if existing ~= nil then return existing end
+            else
+                node = {}
+                root[key1] = node
+            end
+            local obj = init_obj(ctor())
+            obj[a1.slot_name] = v1
+            obj[a2.slot_name] = v2
+            node[key2] = obj
+            return obj
+        end
+    end
+
+    if kind == "HandleScalar1CtorNoCache" then
+        local a1 = fields[plan.arg1_ix]
+        local arena = a1.arena
+        if arena.kind == "value" then
+            local by_value = arena.by_value
+            local values = arena.values
+            return function(_, v1)
+                if not a1.check(v1) then
+                    error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+                end
+                local obj = init_obj(ctor())
+                if v1 == nil then
+                    obj[a1.handle_field] = 0
+                    return obj
+                end
+                local handle = by_value[v1]
+                if handle == nil then
+                    handle = arena.next_handle
+                    arena.next_handle = handle + 1
+                    by_value[v1] = handle
+                    values[handle] = v1
+                end
+                obj[a1.handle_field] = handle
+                return obj
+            end
+        end
+        return function(_, v1)
+            if not a1.check(v1) then
+                error(string.format("bad argument #%d to '%s' expected '%s'", 1, class_name, a1.display_type), 2)
+            end
+            local obj = init_obj(ctor())
+            obj[a1.handle_field] = arena_intern(arena, arena_normalize(arena, v1))
+            return obj
+        end
+    end
+
+    if kind == "GenericCtor" then
+        return build_generic_ctor(class, record, compiled_fields, state, context_id)
+    end
+
+    error("asdl2_native_leaf_luajit: unknown ctor plan kind " .. tostring(kind), 2)
+end
+
 local function install_record_class(ctx, record)
     local header = record.header
-    local ctype_name = ctype_name_for_fqname(header.fqname)
+    local ctype_name = S(record.ctype_name)
     local fqname = S(header.fqname)
     local class = installed_record_classes[ctype_name]
     if class == nil then
@@ -702,91 +762,15 @@ local function install_record_class(ctx, record)
         class.__ctype = ctype
         class.__ctor = ffi.metatype(ctype, class)
         ctype_registry[tostring(ctype)] = class
-        class.__handle_field_by_name = {}
-        class.__handle_arena_id_by_name = {}
-        class.__handle_type_name_by_name = {}
-        class.__handle_check_by_name = {}
-        class.__field_checks_ordered = {}
-        class.__field_inline_ordered = {}
-        class.__field_type_name_ordered = {}
-        class.__field_slot_name_ordered = {}
-        class.__field_handle_field_ordered = {}
-        class.__field_arena_id_ordered = {}
-        class.__has_handle_fields = false
-        for i = 1, #record.fields do
-            local field = record.fields[i]
-            local field_kind = field.kind
-            local field_name = S(field.name)
-            local check_node = field.check
-            local check_kind = K(check_node)
-            local scalar_check
-
-            if check_kind == "AnyCheck" then
-                scalar_check = builtin_checks.any
-            elseif check_kind == "BuiltinCheck" then
-                local name = S(check_node.name)
-                scalar_check = assert(builtin_checks[name], "unknown builtin check: " .. tostring(name))
-            elseif check_kind == "ExternalCheck" then
-                local name = S(check_node.fqname)
-                scalar_check = assert(ctx.extern_checks[name], "unknown extern check: " .. tostring(name))
-            elseif check_kind == "ExactClassCheck" then
-                scalar_check = exact_class_check(check_node.class_id)
-            elseif check_kind == "SumFamilyCheck" then
-                scalar_check = sum_family_check(check_node.family_id)
-            else
-                error("asdl2_native_leaf_luajit: unknown check kind " .. tostring(check_kind), 2)
-            end
-
-            local type_name = S(field.type_name)
-            local check = scalar_check
-            local is_inline = field_kind == "InlineField"
-            local handle_field = nil
-            local arena_id = nil
-            local slot_name = nil
-
-            if is_inline then
-                slot_name = field.c_name
-            elseif field_kind == "HandleListField" then
-                type_name = type_name .. "*"
-                check = checklist(scalar_check)
-                handle_field = field.handle_field
-                arena_id = field.arena_id
-                class.__has_handle_fields = true
-            elseif field_kind == "HandleScalarField" then
-                if K(field.cardinality) == "Optional" then
-                    type_name = type_name .. "?"
-                    check = checkoptional(scalar_check)
-                end
-                handle_field = field.handle_field
-                arena_id = field.arena_id
-                class.__has_handle_fields = true
-            else
-                error("asdl2_native_leaf_luajit: unknown field kind " .. tostring(field_kind), 2)
-            end
-
-            class.__field_checks_ordered[i] = check
-            class.__field_inline_ordered[i] = is_inline
-            class.__field_type_name_ordered[i] = type_name
-            class.__field_slot_name_ordered[i] = slot_name
-            class.__field_handle_field_ordered[i] = handle_field
-            class.__field_arena_id_ordered[i] = arena_id
-
-            if not is_inline then
-                class.__handle_field_by_name[field_name] = handle_field
-                class.__handle_arena_id_by_name[field_name] = arena_id
-                class.__handle_type_name_by_name[field_name] = type_name
-                class.__handle_check_by_name[field_name] = check
-            end
-        end
-        install_field_runtime(class)
         install_class_runtime(class)
         class.isclassof = record_class_isclassof
     end
 
+    class.__header = header
     class.__class_id = header.class_id
-    class.__family_id = (K(record) == "VariantRecord") and header.family_id or 0
-    class.__variant_tag = (K(record) == "VariantRecord") and header.variant_tag or 0
-    class.kind = (K(record) == "VariantRecord") and S(header.kind_name) or nil
+    class.__family_id = (K(record) == "VariantClass") and header.family_id or 0
+    class.__variant_tag = (K(record) == "VariantClass") and header.variant_tag or 0
+    class.kind = (K(record) == "VariantClass") and S(header.kind_name) or nil
 
     return class
 end
@@ -872,13 +856,13 @@ end
 
 function M.install(schema, ctx)
     ctx = ctx or M.new_context()
-    local records, sums, arenas, caches = schema_parts(schema)
+    local records, sums, arenas, caches = schema.records, schema.sums, schema.arenas, schema.caches
     local state = install_context_state(arenas, caches, ctx)
 
     local cdefs = {}
     for i = 1, #records do
         local record = records[i]
-        local ctype_name = ctype_name_for_fqname(record.header.fqname)
+        local ctype_name = S(record.ctype_name)
         if not installed_ctypes[ctype_name] then
             installed_ctypes[ctype_name] = true
             cdefs[#cdefs + 1] = build_record_cdef(record)
@@ -899,6 +883,20 @@ function M.install(schema, ctx)
         classes[S(sum.header.fqname)] = install_sum_class(sum)
     end
 
+    for _, class in pairs(classes) do
+        for k, v in pairs(class) do
+            if type(k) == "string" and type(v) == "function"
+                and k ~= "isclassof"
+                and not k:match("^__") then
+                class[k] = nil
+            end
+        end
+        local fresh_members = {}
+        fresh_members[class] = true
+        class.members = fresh_members
+        class.__sum_parent = nil
+    end
+
     for i = 1, #sums do
         local sum = sums[i]
         local parent = classes[S(sum.header.fqname)]
@@ -916,9 +914,11 @@ function M.install(schema, ctx)
     for i = 1, #records do
         local record = records[i]
         local class = classes[S(record.header.fqname)]
-        local bound_ctor = build_bound_ctor(ctx, record, class, state, ctx.__context_id)
+        local compiled_fields = compile_runtime_fields(ctx, record, state)
+        install_access_runtime(class, record, compiled_fields)
+        local bound_ctor = build_bound_ctor(record, class, compiled_fields, state, ctx.__context_id)
         local exported = make_record_export(class, bound_ctor)
-        if K(record) == "VariantRecord" and #record.fields == 0 then
+        if K(record.export) == "NullaryValueExport" then
             exported = bound_ctor(exported)
         end
         ctx:_SetDefinition(S(record.header.fqname), exported)

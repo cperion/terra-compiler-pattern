@@ -56,8 +56,12 @@ local function sum_text(variant_count, field_count)
     return string.format("Sum = %s attributes (%s)", table.concat(ctors, " | "), table.concat(attrs, ", "))
 end
 
+local function module_name(seed)
+    return "Bench" .. tostring(seed)
+end
+
 local function build_text(seed, type_count, field_count, variant_count)
-    local lines = { "module Bench {" }
+    local lines = { "module " .. module_name(seed) .. " {" }
     for i = 1, type_count do
         lines[#lines + 1] = product_text(i, field_count)
     end
@@ -86,9 +90,12 @@ function M.load_from_env()
         fields, variants = 12, 8
     end
 
-    local pool = {}
-    for i = 1, iters + 256 do
-        pool[i] = T.Asdl2Text.Spec(build_text(i + 10000, types, fields, variants))
+    local pool = nil
+    if mode == "parse_distinct" then
+        pool = {}
+        for i = 1, iters do
+            pool[i] = T.Asdl2Text.Spec(build_text(i + 10000, types, fields, variants))
+        end
     end
 
     local base = T.Asdl2Text.Spec(build_text(1, types, fields, variants))

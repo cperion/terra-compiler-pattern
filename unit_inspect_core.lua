@@ -16,9 +16,17 @@ function M.new(U)
         return name:match("([^.]+)$") or name
     end
 
+    function H.unwrap_class(value)
+        if type(value) == "table" and rawget(value, "__class") ~= nil then
+            return rawget(value, "__class")
+        end
+        return value
+    end
+
     function H.is_asdl_class(value)
-        return type(value) == "table"
-            and type(value.isclassof) == "function"
+        local class = H.unwrap_class(value)
+        return type(class) == "table"
+            and type(class.isclassof) == "function"
     end
 
     function H.is_public_method(name, value)
@@ -82,7 +90,8 @@ function M.new(U)
     function H.sorted_class_names(ns)
         local names = {}
         U.filter_map_into(names, U.each_name({ ns }), function(name)
-            if H.is_asdl_class(ns[name]) then
+            local value = ns[name]
+            if H.is_asdl_class(value) then
                 return name
             end
         end)
@@ -462,7 +471,8 @@ function M.build(U, ctx, phases, pipeline_phases)
             end
 
             U.each(H.sorted_class_names(ns), function(name)
-                local class = ns[name]
+                local raw_value = ns[name]
+                local class = H.unwrap_class(raw_value)
                 local fqname = phase_name .. "." .. name
                 local t = {
                     phase = phase_name,

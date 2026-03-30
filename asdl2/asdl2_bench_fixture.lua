@@ -150,6 +150,10 @@ function M.build_machine(seed, record_count, field_count, variant_count)
     return M.build_lowered(seed, record_count, field_count, variant_count):define_machine()
 end
 
+function M.build_luajit(seed, record_count, field_count, variant_count)
+    return M.build_machine(seed, record_count, field_count, variant_count):lower_luajit()
+end
+
 function M.new_ctx()
     local ctx = Native.new_context()
     for i = 0, 3 do

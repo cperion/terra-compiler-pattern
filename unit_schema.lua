@@ -240,24 +240,10 @@ function M.install(U)
         return ctx
     end
 
-    local function define_asdl_into(ctx, source_name, text)
-        local ok, err = pcall(function()
-            ctx:Define(text)
-        end)
-        if ok then return end
-
-        local msg = tostring(err)
-        if msg:match("class name already defined") then
-            error((
-                "ASDL source '%s' is not raw-terra-ASDL-compatible. "
-                .. "This usually means two sum constructors in the same module "
-                .. "share a name. Current terra/src/asdl.lua requires constructor class names to be unique within a module. "
-                .. "You need an ASDL-module lowering pass that qualifies constructors before T:Define(...).\n\n"
-                .. "Original error: %s"
-            ):format(tostring(source_name), msg), 2)
-        end
-
-        error(err, 2)
+    local function define_asdl2_context(text)
+        local asdl2_schema = require("asdl2.asdl2_schema")
+        local asdl2_T = asdl2_schema.ctx
+        return asdl2_T.Asdl2Text.Spec(text):parse():catalog():classify_lower():define_machine():install()
     end
 
     local function run_installer(ctx, config, inst)
@@ -601,17 +587,14 @@ function M.install(U)
         project = U.normalize_project(project)
         local projects = collect_project_closure(project)
 
-        local asdl = require("asdl")
-        local ctx = asdl.NewContext()
         local combined_schema_texts = {}
-        local combined_schema_names = {}
         U.each(projects, function(p)
             U.each(p.schema_paths, function(path)
                 combined_schema_texts[#combined_schema_texts + 1] = load_schema_source(path)
-                combined_schema_names[#combined_schema_names + 1] = path
             end)
         end)
-        define_asdl_into(ctx, table.concat(combined_schema_names, ", "), table.concat(combined_schema_texts, "\n\n"))
+        local combined_text = table.concat(combined_schema_texts, "\n\n")
+        local ctx = define_asdl2_context(combined_text)
 
         U.each(projects, function(p)
             if p.stubs then

@@ -22,14 +22,14 @@ function M.load_from_env()
         fields, variants = 12, 8
     end
 
-    local base_machine = Fixture.build_machine(1, products, fields, variants)
+    local base_luajit = Fixture.build_luajit(1, products, fields, variants)
     local base_ctx = Fixture.new_ctx()
-    assert(base_machine:install(base_ctx) ~= nil)
+    assert(base_luajit:install(base_ctx) ~= nil)
 
     local pool = {}
     local ctx_pool = {}
     for i = 1, iters + 64 do
-        pool[i] = Fixture.build_machine(i + 1000, products, fields, variants)
+        pool[i] = Fixture.build_luajit(i + 1000, products, fields, variants)
         ctx_pool[i] = Fixture.new_ctx()
     end
 
@@ -44,7 +44,7 @@ function M.load_from_env()
     local function run_build_plus_install()
         local sink = 0
         for i = 1, iters do
-            if Fixture.build_machine(i + 200000, products, fields, variants):install(Fixture.new_ctx()) ~= nil then
+            if Fixture.build_luajit(i + 200000, products, fields, variants):install(Fixture.new_ctx()) ~= nil then
                 sink = sink + 1
             end
         end

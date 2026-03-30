@@ -30,6 +30,8 @@ local function getenv_number(name, default)
     return n
 end
 
+local BENCH_SINK = 0
+
 local function bench_avg_ns(iters, fn)
     local warm = math.min(iters, 1000)
     local sink = 0
@@ -39,7 +41,8 @@ local function bench_avg_ns(iters, fn)
     local t0 = now_s()
     for i = 1, iters do sink = sink + fn(i) end
     local t1 = now_s()
-    return ((t1 - t0) * 1e9) / iters, sink
+    BENCH_SINK = BENCH_SINK + sink
+    return ((t1 - t0) * 1e9) / iters
 end
 
 local function bench_avg_ms(iters, fn)
@@ -51,7 +54,8 @@ local function bench_avg_ms(iters, fn)
     local t0 = now_s()
     for i = 1, iters do sink = sink + fn(i) end
     local t1 = now_s()
-    return ((t1 - t0) * 1000) / iters, sink
+    BENCH_SINK = BENCH_SINK + sink
+    return ((t1 - t0) * 1000) / iters
 end
 
 local function report_pair(label, unit, a, b)
@@ -81,6 +85,7 @@ local function install_asdl2(text)
         :catalog()
         :classify_lower()
         :define_machine()
+        :lower_luajit()
         :install(Native.new_context())
 end
 
@@ -92,6 +97,25 @@ end
 
 local install_iters = math.max(1, math.floor(getenv_number("ASDL2_VS_TERRA_INSTALL_ITERS", 20)))
 local hot_iters = math.max(1, math.floor(getenv_number("ASDL2_VS_TERRA_HOT_ITERS", 2000000)))
+
+local HOT_POOL = 256
+local HIT_POOL = 8
+local xs = ffi.new("double[?]", HOT_POOL)
+local ys = ffi.new("double[?]", HOT_POOL)
+local payloads = ffi.new("double[?]", HOT_POOL)
+for i = 0, HOT_POOL - 1 do
+    xs[i] = (i * 13) % 97 + 0.25
+    ys[i] = (i * 17) % 89 + 0.75
+    payloads[i] = (i * 19) % 83 + 1.5
+end
+
+local function hot_idx(i)
+    return (i - 1) % HOT_POOL
+end
+
+local function hit_idx(i)
+    return (i - 1) % HIT_POOL
+end
 
 local base_text = build_text(1)
 local asdl2_ctx = install_asdl2(base_text)
@@ -126,45 +150,57 @@ local terra_install_ms = bench_avg_ms(install_iters, function(i)
 end)
 
 local a2_ctor_product_plain_ns = bench_avg_ns(hot_iters, function(i)
-    return tonumber(A2_Pn(i, i + 1).x)
+    local idx = hot_idx(i)
+    return tonumber(A2_Pn(xs[idx], ys[idx]).x)
 end)
 local t_ctor_product_plain_ns = bench_avg_ns(hot_iters, function(i)
-    return T_Pn(i, i + 1).x
+    local idx = hot_idx(i)
+    return T_Pn(xs[idx], ys[idx]).x
 end)
 
 local a2_ctor_product_unique_ns = bench_avg_ns(hot_iters, function(i)
-    return tonumber(A2_Pu(i, i + 1).x)
+    local idx = hot_idx(i)
+    return tonumber(A2_Pu(xs[idx], ys[idx]).x)
 end)
 local t_ctor_product_unique_ns = bench_avg_ns(hot_iters, function(i)
-    return T_Pu(i, i + 1).x
+    local idx = hot_idx(i)
+    return T_Pu(xs[idx], ys[idx]).x
 end)
 
 local a2_ctor_variant_plain_ns = bench_avg_ns(hot_iters, function(i)
-    return tonumber(A2_An(i).payload)
+    local idx = hot_idx(i)
+    return tonumber(A2_An(payloads[idx]).payload)
 end)
 local t_ctor_variant_plain_ns = bench_avg_ns(hot_iters, function(i)
-    return T_An(i).payload
+    local idx = hot_idx(i)
+    return T_An(payloads[idx]).payload
 end)
 
 local a2_ctor_variant_unique_ns = bench_avg_ns(hot_iters, function(i)
-    return tonumber(A2_Au(i).payload)
+    local idx = hot_idx(i)
+    return tonumber(A2_Au(payloads[idx]).payload)
 end)
 local t_ctor_variant_unique_ns = bench_avg_ns(hot_iters, function(i)
-    return T_Au(i).payload
+    local idx = hot_idx(i)
+    return T_Au(payloads[idx]).payload
 end)
 
-local a2_ctor_product_unique_hit_ns = bench_avg_ns(hot_iters, function()
-    return tonumber(A2_Pu(1, 2).x)
+local a2_ctor_product_unique_hit_ns = bench_avg_ns(hot_iters, function(i)
+    local idx = hit_idx(i)
+    return tonumber(A2_Pu(xs[idx], ys[idx]).x)
 end)
-local t_ctor_product_unique_hit_ns = bench_avg_ns(hot_iters, function()
-    return T_Pu(1, 2).x
+local t_ctor_product_unique_hit_ns = bench_avg_ns(hot_iters, function(i)
+    local idx = hit_idx(i)
+    return T_Pu(xs[idx], ys[idx]).x
 end)
 
-local a2_ctor_variant_unique_hit_ns = bench_avg_ns(hot_iters, function()
-    return tonumber(A2_Au(1).payload)
+local a2_ctor_variant_unique_hit_ns = bench_avg_ns(hot_iters, function(i)
+    local idx = hit_idx(i)
+    return tonumber(A2_Au(payloads[idx]).payload)
 end)
-local t_ctor_variant_unique_hit_ns = bench_avg_ns(hot_iters, function()
-    return T_Au(1).payload
+local t_ctor_variant_unique_hit_ns = bench_avg_ns(hot_iters, function(i)
+    local idx = hit_idx(i)
+    return T_Au(payloads[idx]).payload
 end)
 
 local a2_check_exact_ns = bench_avg_ns(hot_iters, function()
@@ -200,3 +236,4 @@ report_pair("ctor_variant_unique_hit", "ns", a2_ctor_variant_unique_hit_ns, t_ct
 report_pair("check_exact", "ns", a2_check_exact_ns, t_check_exact_ns)
 report_pair("check_sum", "ns", a2_check_sum_ns, t_check_sum_ns)
 report_pair("read_field", "ns", a2_read_field_ns, t_read_field_ns)
+print(string.format("bench_sink=%0.3f", BENCH_SINK))

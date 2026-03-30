@@ -47,18 +47,18 @@ elseif scenario == "wide" then
     fields, variants = 12, 8
 end
 
-local base_machine = Fixture.build_machine(1, products, fields, variants)
+local base_luajit = Fixture.build_luajit(1, products, fields, variants)
 local base_ctx = Fixture.new_ctx()
-assert(base_machine:install(base_ctx) ~= nil)
+assert(base_luajit:install(base_ctx) ~= nil)
 
 local install_existing_ms = bench_avg_ms(iters, function()
-    base_machine:install(base_ctx)
+    base_luajit:install(base_ctx)
 end)
 
 local pool = {}
 local ctx_pool = {}
 for i = 1, iters + 64 do
-    pool[i] = Fixture.build_machine(i + 1000, products, fields, variants)
+    pool[i] = Fixture.build_luajit(i + 1000, products, fields, variants)
     ctx_pool[i] = Fixture.new_ctx()
 end
 
@@ -67,12 +67,12 @@ local install_distinct_ms = bench_avg_ms(iters, function(i)
     return ctx ~= nil and 1 or 0
 end)
 
-local build_machine_ms = bench_avg_ms(iters, function(i)
-    Fixture.build_machine(i + 2000, products, fields, variants)
+local build_luajit_ms = bench_avg_ms(iters, function(i)
+    Fixture.build_luajit(i + 2000, products, fields, variants)
 end)
 
 local build_plus_install_ms = bench_avg_ms(iters, function(i)
-    Fixture.build_machine(i + 3000, products, fields, variants):install(Fixture.new_ctx())
+    Fixture.build_luajit(i + 3000, products, fields, variants):install(Fixture.new_ctx())
 end)
 
 print(string.format(
@@ -85,5 +85,5 @@ print(string.format(
 ))
 print(string.format("install_existing_avg_ms: %.3f", install_existing_ms))
 print(string.format("install_distinct_avg_ms: %.3f", install_distinct_ms))
-print(string.format("build_machine_avg_ms: %.3f", build_machine_ms))
+print(string.format("build_luajit_avg_ms: %.3f", build_luajit_ms))
 print(string.format("build_plus_install_avg_ms: %.3f", build_plus_install_ms))

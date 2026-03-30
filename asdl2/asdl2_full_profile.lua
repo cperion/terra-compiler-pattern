@@ -76,6 +76,7 @@ local function compile_chain(text, ctx)
         :catalog()
         :classify_lower()
         :define_machine()
+        :lower_luajit()
         :install(ctx)
 end
 
@@ -131,7 +132,7 @@ function M.load_from_env()
     end
 
     local function run_install_existing()
-        local chain = T.Asdl2Text.Spec(base_text):parse():catalog():classify_lower():define_machine()
+        local chain = T.Asdl2Text.Spec(base_text):parse():catalog():classify_lower():define_machine():lower_luajit()
         local sink = 0
         for i = 1, iters do
             local ctx = chain:install(base_ctx)

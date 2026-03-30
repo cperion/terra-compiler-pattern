@@ -87,21 +87,21 @@ local function test_project_deps_install_active_backend()
     os.execute("mkdir -p " .. string.format("%q", dep .. "/schema"))
 
     write(dep .. "/schema/app.asdl", [[
-module Demo {
-  Node = () unique
+module DepLib {
+  Widget = () unique
 }
 ]])
-    write(dep .. "/pipeline.lua", "return { \"Demo\" }\n")
-    write(dep .. "/boundaries/demo_node.lua", [[
+    write(dep .. "/pipeline.lua", "return { \"DepLib\" }\n")
+    write(dep .. "/boundaries/dep_lib_widget.lua", [[
 return function(T)
-  function T.Demo.Node:lower()
+  function T.DepLib.Widget:lower()
     return self
   end
 end
 ]])
-    write(dep .. "/boundaries/demo_node_luajit.lua", [[
+    write(dep .. "/boundaries/dep_lib_widget_luajit.lua", [[
 return function(T)
-  function T.Demo.Node:jit_only()
+  function T.DepLib.Widget:jit_only()
     return self
   end
 end
@@ -110,18 +110,18 @@ end
     local host = project_dir("host_proj")
     os.execute("mkdir -p " .. string.format("%q", host .. "/schema"))
     write(host .. "/schema/app.asdl", [[
-module Host {
+module HostApp {
   Marker = () unique
 }
 ]])
-    write(host .. "/pipeline.lua", "return { \"Demo\", \"Host\" }\n")
+    write(host .. "/pipeline.lua", "return { \"DepLib\", \"HostApp\" }\n")
     write(host .. "/unit_project.lua", "return { deps = { \"../dep_proj\" } }\n")
 
     local I = U.inspect_from(host)
     assert(#I.projects == 2)
-    assert(I.find_boundary("Demo.Node:lower") ~= nil)
-    assert(I.find_boundary("Demo.Node:jit_only") ~= nil)
-    assert(U.project_type_backend_path(I.projects[1], "Demo.Node", "luajit"):match("demo_node_luajit%.lua$"))
+    assert(I.find_boundary("DepLib.Widget:lower") ~= nil)
+    assert(I.find_boundary("DepLib.Widget:jit_only") ~= nil)
+    assert(U.project_type_backend_path(I.projects[1], "DepLib.Widget", "luajit"):match("dep_lib_widget_luajit%.lua$"))
     assert(I.backend_inventory.totals.by_backend.luajit.impl == 1)
 end
 
@@ -130,7 +130,7 @@ local function test_scaffold_project_tree()
     os.execute("mkdir -p " .. string.format("%q", dir .. "/schema"))
 
     write(dir .. "/schema/app.asdl", [[
-module Demo {
+module TreeTest {
   Expr = Add(number x) | Mul(number y)
   Node = (Expr expr) unique
 }
@@ -140,27 +140,27 @@ module Demo {
 return {
   layout = "tree",
   stubs = {
-    ["Demo.Expr"] = "lower",
-    ["Demo.Node"] = "lower",
+    ["TreeTest.Expr"] = "lower",
+    ["TreeTest.Node"] = "lower",
   },
 }
 ]])
 
     local P = U.load_project(dir)
     assert(P.layout == "tree")
-    assert(U.project_type_path(P, "Demo.Expr"):match("demo[/\\]expr%.lua$"))
-    assert(U.project_type_bench_path(P, "Demo.Expr"):match("demo[/\\]expr_bench%.lua$"))
+    assert(U.project_type_path(P, "TreeTest.Expr"):match("tree_test[/\\]expr%.lua$"))
+    assert(U.project_type_bench_path(P, "TreeTest.Expr"):match("tree_test[/\\]expr_bench%.lua$"))
 
     local I = U.inspect_from(dir)
     local written = U.scaffold_project(P, I, { all_artifacts = true, force = true })
     assert(#written == 8)
 
-    local impl_path = U.project_type_path(P, "Demo.Node")
-    local test_path = U.project_type_test_path(P, "Demo.Node")
-    local bench_path = U.project_type_bench_path(P, "Demo.Node")
-    local profile_path = U.project_type_profile_path(P, "Demo.Node")
+    local impl_path = U.project_type_path(P, "TreeTest.Node")
+    local test_path = U.project_type_test_path(P, "TreeTest.Node")
+    local bench_path = U.project_type_bench_path(P, "TreeTest.Node")
+    local profile_path = U.project_type_profile_path(P, "TreeTest.Node")
 
-    assert(read(impl_path):match("function T%.Demo%.Node:lower%(%)"))
+    assert(read(impl_path):match("function T%.TreeTest%.Node:lower%(%)"))
     assert(read(test_path):match("test_lower"))
     assert(read(bench_path):match("bench_lower"))
     assert(read(profile_path):match("profile_lower"))

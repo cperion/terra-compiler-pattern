@@ -110,13 +110,15 @@ local function compile_chain(text, ctx)
     local catalog = source:catalog()
     local lowered = catalog:classify_lower()
     local machine = lowered:define_machine()
-    local installed = machine:install(ctx)
+    local luajit = machine:lower_luajit()
+    local installed = luajit:install(ctx)
     return {
         text = text_spec,
         source = source,
         catalog = catalog,
         lowered = lowered,
         machine = machine,
+        luajit = luajit,
         ctx = installed,
     }
 end
@@ -154,8 +156,12 @@ local define_machine_existing_ms = bench_avg_ms(iters, function()
     base.lowered:define_machine()
 end)
 
+local lower_luajit_existing_ms = bench_avg_ms(iters, function()
+    base.machine:lower_luajit()
+end)
+
 local install_existing_ms = bench_avg_ms(iters, function()
-    base.machine:install(base_ctx)
+    base.luajit:install(base_ctx)
 end)
 
 local pool = {}
@@ -202,6 +208,7 @@ print(string.format("parse_existing_avg_ms: %.3f", parse_existing_ms))
 print(string.format("catalog_existing_avg_ms: %.3f", catalog_existing_ms))
 print(string.format("classify_lower_existing_avg_ms: %.3f", classify_lower_existing_ms))
 print(string.format("define_machine_existing_avg_ms: %.3f", define_machine_existing_ms))
+print(string.format("lower_luajit_existing_avg_ms: %.3f", lower_luajit_existing_ms))
 print(string.format("install_existing_avg_ms: %.3f", install_existing_ms))
 print(string.format("build_text_avg_ms: %.3f", build_text_ms))
 print(string.format("full_distinct_avg_ms: %.3f", full_distinct_ms))

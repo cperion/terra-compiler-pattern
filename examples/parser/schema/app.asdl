@@ -1,0 +1,35 @@
+-- Parser compiler ASDL
+--
+-- Phases:
+--   GrammarSource     the authored grammar (rules + patterns)
+--   GrammarCompiled   compiled closure tree description
+
+module GrammarSource {
+
+    Grammar = (Rule* rules, string start) unique
+
+    Rule = (string name, Pattern body) unique
+
+    Pattern
+        = Literal(string text)
+        | CharRange(number low, number high)
+        | CharSet(string chars, boolean negated)
+        | Any
+        | Sequence(Pattern* patterns)
+        | Choice(Pattern* alternatives)
+        | Repeat(Pattern pattern, number min, number max)
+        | Optional(Pattern pattern)
+        | LookAhead(Pattern pattern, boolean positive)
+        | Capture(string name, Pattern pattern)
+        | Reference(string rule_name)
+        | Action(string tag, Pattern pattern)
+        | EOF
+}
+
+module GrammarCompiled {
+
+    Parser = (
+        number rule_count,
+        number pattern_count
+    ) unique
+}

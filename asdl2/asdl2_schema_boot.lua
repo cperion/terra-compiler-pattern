@@ -932,6 +932,686 @@ return Boot.build({
                 },
             },
         },
+        Asdl2LuaJIT = {
+            records = {
+                {
+                    fields = {},
+                    name = "AnyListCheck",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "AnyOptionalCheck",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "AnyScalarCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "BuiltinListCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "BuiltinOptionalCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "BuiltinScalarCheck",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "CallableExport",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "class_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "ExactClassListCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "class_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "ExactClassOptionalCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "class_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "ExactClassScalarCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "fqname",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "ExternalListCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "fqname",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "ExternalOptionalCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "fqname",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "ExternalScalarCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = true,
+                            name = "arg_ixs",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "cache",
+                            optional = false,
+                            type = "CachePlan",
+                        },
+                    },
+                    name = "GenericCtor",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = true,
+                            name = "field_ixs",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "HandleAccess",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "handle_field",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "arena_id",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "handle_ctype",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "check",
+                            optional = false,
+                            type = "CheckPlan",
+                        },
+                        {
+                            list = false,
+                            name = "display_type",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "HandleListFieldPlan",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "arg1_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "HandleScalar1CtorNoCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "handle_field",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "arena_id",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "handle_ctype",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "check",
+                            optional = false,
+                            type = "CheckPlan",
+                        },
+                        {
+                            list = false,
+                            name = "display_type",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "HandleScalarFieldPlan",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "arg1_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "Inline1CtorNoCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "cache_id",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "arg1_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "Inline1CtorStructuralCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "arg1_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "arg2_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "Inline2CtorNoCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "cache_id",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "arg1_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "arg2_ix",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "Inline2CtorStructuralCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "slot_name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "c_type",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "check",
+                            optional = false,
+                            type = "CheckPlan",
+                        },
+                        {
+                            list = false,
+                            name = "display_type",
+                            optional = false,
+                            type = "string",
+                        },
+                    },
+                    name = "InlineFieldPlan",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "InlineOnlyAccess",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "NoCachePlan",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "NullaryCtorNoCache",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "cache_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "NullaryCtorSingletonCache",
+                    unique = false,
+                },
+                {
+                    fields = {},
+                    name = "NullaryValueExport",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "header",
+                            optional = false,
+                            type = "Asdl2Catalog.ProductHeader",
+                        },
+                        {
+                            list = false,
+                            name = "ctype_name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = true,
+                            name = "fields",
+                            optional = false,
+                            type = "FieldPlan",
+                        },
+                        {
+                            list = false,
+                            name = "cache",
+                            optional = false,
+                            type = "CachePlan",
+                        },
+                        {
+                            list = false,
+                            name = "access",
+                            optional = false,
+                            type = "AccessPlan",
+                        },
+                        {
+                            list = false,
+                            name = "ctor",
+                            optional = false,
+                            type = "CtorPlan",
+                        },
+                        {
+                            list = false,
+                            name = "export",
+                            optional = false,
+                            type = "ExportPlan",
+                        },
+                    },
+                    name = "ProductClass",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = true,
+                            name = "records",
+                            optional = false,
+                            type = "RecordClass",
+                        },
+                        {
+                            list = true,
+                            name = "sums",
+                            optional = false,
+                            type = "SumClass",
+                        },
+                        {
+                            list = true,
+                            name = "arenas",
+                            optional = false,
+                            type = "Asdl2Lowered.ArenaSlot",
+                        },
+                        {
+                            list = true,
+                            name = "caches",
+                            optional = false,
+                            type = "Asdl2Lowered.CacheSlot",
+                        },
+                    },
+                    name = "Schema",
+                    unique = true,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "cache_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "SingletonCachePlan",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "cache_id",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "key_arity",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "StructuralCachePlan",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "header",
+                            optional = false,
+                            type = "Asdl2Catalog.SumHeader",
+                        },
+                        {
+                            list = true,
+                            name = "variants",
+                            optional = false,
+                            type = "Asdl2Catalog.VariantHeader",
+                        },
+                    },
+                    name = "SumClass",
+                    unique = true,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "family_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "SumFamilyListCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "family_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "SumFamilyOptionalCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "family_id",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "SumFamilyScalarCheck",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "header",
+                            optional = false,
+                            type = "Asdl2Catalog.VariantHeader",
+                        },
+                        {
+                            list = false,
+                            name = "ctype_name",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = true,
+                            name = "fields",
+                            optional = false,
+                            type = "FieldPlan",
+                        },
+                        {
+                            list = false,
+                            name = "cache",
+                            optional = false,
+                            type = "CachePlan",
+                        },
+                        {
+                            list = false,
+                            name = "access",
+                            optional = false,
+                            type = "AccessPlan",
+                        },
+                        {
+                            list = false,
+                            name = "ctor",
+                            optional = false,
+                            type = "CtorPlan",
+                        },
+                        {
+                            list = false,
+                            name = "export",
+                            optional = false,
+                            type = "ExportPlan",
+                        },
+                    },
+                    name = "VariantClass",
+                    unique = false,
+                },
+            },
+            sums = {
+                {
+                    name = "AccessPlan",
+                    variants = {
+                        "InlineOnlyAccess",
+                        "HandleAccess",
+                    },
+                },
+                {
+                    name = "CachePlan",
+                    variants = {
+                        "NoCachePlan",
+                        "SingletonCachePlan",
+                        "StructuralCachePlan",
+                    },
+                },
+                {
+                    name = "CheckPlan",
+                    variants = {
+                        "AnyScalarCheck",
+                        "AnyOptionalCheck",
+                        "AnyListCheck",
+                        "BuiltinScalarCheck",
+                        "BuiltinOptionalCheck",
+                        "BuiltinListCheck",
+                        "ExternalScalarCheck",
+                        "ExternalOptionalCheck",
+                        "ExternalListCheck",
+                        "ExactClassScalarCheck",
+                        "ExactClassOptionalCheck",
+                        "ExactClassListCheck",
+                        "SumFamilyScalarCheck",
+                        "SumFamilyOptionalCheck",
+                        "SumFamilyListCheck",
+                    },
+                },
+                {
+                    name = "CtorPlan",
+                    variants = {
+                        "NullaryCtorNoCache",
+                        "NullaryCtorSingletonCache",
+                        "Inline1CtorNoCache",
+                        "Inline1CtorStructuralCache",
+                        "Inline2CtorNoCache",
+                        "Inline2CtorStructuralCache",
+                        "HandleScalar1CtorNoCache",
+                        "GenericCtor",
+                    },
+                },
+                {
+                    name = "ExportPlan",
+                    variants = {
+                        "CallableExport",
+                        "NullaryValueExport",
+                    },
+                },
+                {
+                    name = "FieldPlan",
+                    variants = {
+                        "InlineFieldPlan",
+                        "HandleScalarFieldPlan",
+                        "HandleListFieldPlan",
+                    },
+                },
+                {
+                    name = "RecordClass",
+                    variants = {
+                        "ProductClass",
+                        "VariantClass",
+                    },
+                },
+            },
+        },
         Asdl2Machine = {
             records = {
                 {
@@ -1350,5 +2030,6 @@ return Boot.build({
         "Asdl2Catalog",
         "Asdl2Lowered",
         "Asdl2Machine",
+        "Asdl2LuaJIT",
     },
 })

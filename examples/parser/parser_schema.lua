@@ -1,23 +1,11 @@
+-- parser_schema.lua
+-- Loads the parser project via unit project conventions + asdl2.
+
 local U = require("unit")
+local spec = U.load_inspect_spec("examples/parser")
+local ctx = spec.ctx
 
-return U.spec {
-    texts = {
-        require("examples.parser.parser_asdl"),
-    },
-
-    -- ---------------------------------------------------------------------
-    -- Parser compiler pipeline
-    -- ---------------------------------------------------------------------
-    --   GrammarSource
-    --     -> compile
-    --   GrammarCompiled (closure tree that LuaJIT traces)
-    pipeline = {
-        "GrammarSource",
-        "GrammarCompiled",
-    },
-
-    install = function(T)
-        require("examples.parser.parser_compile")(T)
-        require("examples.parser.parser_builder")(T)
-    end,
+return {
+    ctx = ctx,
+    pipeline = spec.pipeline,
 }

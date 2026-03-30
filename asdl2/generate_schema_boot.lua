@@ -1,6 +1,9 @@
 #!/usr/bin/env luajit
 
-local sketch = require("asdl2.asdl2_asdl_sketch")
+local sketch_path = "asdl2/schema/app.asdl"
+local f = assert(io.open(sketch_path, "r"), "cannot open " .. sketch_path)
+local sketch = f:read("*a")
+f:close()
 
 local TOKENS = "=|?*,(){}."
 local KEYWORDS = { module = true, unique = true }

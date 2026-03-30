@@ -1,12 +1,14 @@
 local Spec = require("asdl2.asdl2_schema_boot")
+local U = require("unit")
 
 local T = Spec.ctx
 
-require("asdl2.asdl2_text")(T)
-require("asdl2.asdl2_source")(T)
-require("asdl2.asdl2_catalog")(T)
-require("asdl2.asdl2_machine")(T)
-require("asdl2.asdl2_install")(T)
+require("asdl2.boundaries.asdl2_text_spec")(T, U)
+require("asdl2.boundaries.asdl2_source_spec")(T, U)
+require("asdl2.boundaries.asdl2_catalog_spec")(T, U)
+require("asdl2.boundaries.asdl2_lowered_schema")(T, U)
+require("asdl2.boundaries.asdl2_machine_schema_luajit")(T, U)
+require("asdl2.boundaries.asdl2_luajit_schema_luajit")(T, U)
 
 Spec.pipeline = {
     "Asdl2Text",
@@ -14,6 +16,7 @@ Spec.pipeline = {
     "Asdl2Catalog",
     "Asdl2Lowered",
     "Asdl2Machine",
+    "Asdl2LuaJIT",
 }
 
 return {

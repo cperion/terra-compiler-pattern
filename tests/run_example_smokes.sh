@@ -18,5 +18,13 @@ run terra unit.t status examples/ui3
 run terra unit.t path examples/ui3 UiDecl.Document
 run terra unit.t scaffold-file examples/ui3 UiDecl.Document
 run terra unit.t status examples/tasks_ui3
+run luajit unit.lua status asdl2
+run luajit unit.lua pipeline asdl2
+run luajit unit.lua boundaries asdl2
+run luajit unit.lua backends asdl2
+run luajit unit.lua backend-path asdl2 Asdl2Machine.Schema luajit
+run luajit unit.lua status examples/parser
+run luajit unit.lua pipeline examples/parser
+run luajit unit.lua boundaries examples/parser
 
 echo "run_example_smokes.sh: ok"

@@ -19,7 +19,7 @@ local function C(ctor, ...)
     return ctor(...)
 end
 
-local function build_machine(seed)
+local function build_luajit(seed)
     local variant_header = T.Asdl2Catalog.VariantHeader(
         KS("BenchNative" .. tostring(seed) .. ".A"),
         KS("BenchNative" .. tostring(seed) .. ".S"),
@@ -66,7 +66,7 @@ local function build_machine(seed)
         L{ T.Asdl2Lowered.Sum(T.Asdl2Catalog.SumHeader(KS("BenchNative" .. tostring(seed) .. ".S"), 3000 + seed), L{ variant_header }) },
         L{ T.Asdl2Lowered.ScalarArenaSlot(1, T.Asdl2Lowered.BuiltinCheck(KS("number")), KS(UINT32)) },
         L{ T.Asdl2Lowered.CacheSlot(1, C(T.Asdl2Lowered.StructuralKind), 2, KS("BenchNative" .. tostring(seed) .. ".U")) }
-    ):define_machine()
+    ):define_machine():lower_luajit()
 end
 
 local function new_ctx()
@@ -86,8 +86,8 @@ function M.load_from_env()
     local install_iters = env_number("ASDL2_NATIVE_INSTALL_ITERS", 40)
     local hot_iters = env_number("ASDL2_NATIVE_HOT_ITERS", 2000000)
 
-    local base_machine = build_machine(1)
-    local base_ctx = Leaf.install(base_machine, new_ctx())
+    local base_luajit = build_luajit(1)
+    local base_ctx = Leaf.install(base_luajit, new_ctx())
     local P = base_ctx[KS("BenchNative1.P")]
     local Urec = base_ctx[KS("BenchNative1.U")]
     local H = base_ctx[KS("BenchNative1.H")]
@@ -98,7 +98,7 @@ function M.load_from_env()
     local pool = {}
     local ctx_pool = {}
     for i = 1, install_iters + 64 do
-        pool[i] = build_machine(i + 1000)
+        pool[i] = build_luajit(i + 1000)
         ctx_pool[i] = new_ctx()
     end
 

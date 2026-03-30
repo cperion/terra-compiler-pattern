@@ -91,6 +91,8 @@ Each phase boundary must resolve a real decision. Typical verbs: `lower`, `resol
 
 As you move through phases, sum types should decrease, decisions should be consumed, shapes should become more concrete. The terminal input should be as flat and monomorphic as possible. A scheduled phase should usually contain zero large domain sum types.
 
+
+
 ### 2.9 Every pure-layer function must be a structural transform
 
 Transitions, reducers, projections, and helpers in the pure layer must use the boundary vocabulary: `U.match`, `U.with`, `errs:each`, `errs:call`, ASDL constructors.
@@ -354,11 +356,21 @@ Once the leaf traces clean, implement the transition ONE layer above it. Profile
 
 Continue recursing upward until you reach the source ASDL. At each layer: implement, profile, if dirty redesign the ASDL above, if clean move up.
 
-### 4.8 The ASDL is fluid
+### 4.8 The ASDL is fluid — the convergence cycle
 
-The ASDL is NEVER frozen during this process. It is a living design document refined by what the profiler tells you. Every trace exit, every NYI, every return-to-interpreter is intelligence about the type system.
+The ASDL is NEVER frozen during implementation. It goes through a predictable lifecycle:
 
-The ASDL stabilizes when leaves stop demanding changes.
+```
+DRAFT → EXPANSION → COLLAPSE
+```
+
+The **draft** is your top-down model from step 3. It is always too coarse. The **expansion** is driven by the profiler — every trace exit demands a new type, a new phase, a new distinction. The type count grows. This is expected. The **collapse** is driven by the expanded types themselves — once all real distinctions are visible, structural redundancy reveals which were modeling accidents. Collapse them. The final ASDL is often simpler than the draft.
+
+This is safe at every step: expansion is validated by trace quality, collapse is validated by re-profiling.
+
+The ASDL stabilizes when leaves stop demanding changes and new features are purely additive.
+
+See `modeling-programs-as-compilers.md` Part 8 for the full convergence cycle.
 
 ---
 
@@ -697,7 +709,7 @@ When the profiler, a leaf, or a user requirement tells you the ASDL needs to cha
 
 ### 8.3 Treat ASDL revision as normal, not as failure
 
-You will not get the ASDL perfect on the first pass. Revision is expected. When implementation reveals resistance, revise the ASDL first.
+You will not get the ASDL perfect on the first pass. Revision follows the convergence cycle (§4.8): draft → expansion under profiler pressure → collapse as redundancy becomes visible. Each stage is validated mechanically. When implementation reveals resistance, revise the ASDL first.
 
 ---
 

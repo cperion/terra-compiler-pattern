@@ -32,14 +32,18 @@ local function KS(s)
     return s
 end
 
+local BENCH_SINK = 0
+
 local function bench_avg_ms(iters, fn)
     local warm = math.min(iters, 100)
-    for i = 1, warm do fn(i) end
+    local sink = 0
+    for i = 1, warm do sink = sink + fn(i) end
     collectgarbage("collect")
     collectgarbage("collect")
     local t0 = now_s()
-    for i = 1, iters do fn(i) end
+    for i = 1, iters do sink = sink + fn(i) end
     local t1 = now_s()
+    BENCH_SINK = BENCH_SINK + sink
     return ((t1 - t0) * 1000) / iters
 end
 
@@ -90,8 +94,12 @@ local function sum_text(variant_count, field_count)
     return string.format("Sum = %s attributes (%s)", table.concat(ctors, " | "), table.concat(attrs, ", "))
 end
 
+local function module_name(seed)
+    return "Bench" .. tostring(seed)
+end
+
 local function build_text(seed, type_count, field_count, variant_count)
-    local lines = { "module Bench {" }
+    local lines = { "module " .. module_name(seed) .. " {" }
     for i = 1, type_count do
         lines[#lines + 1] = product_text(i, field_count)
     end
@@ -117,26 +125,39 @@ local parsed = base:parse()
 assert(parsed.definitions[1].kind == "ModuleDef")
 
 local parse_existing_ms = bench_avg_ms(iters, function()
-    base:parse()
+    return #base:parse().definitions
 end)
 
 local distinct_pool = {}
-for i = 1, iters + 128 do
-    distinct_pool[i] = T.Asdl2Text.Spec(build_text(i + 5000, types, fields, variants))
+do
+    local total = iters + math.min(iters, 100)
+    for i = 1, total do
+        distinct_pool[i] = T.Asdl2Text.Spec(build_text(i + 5000, types, fields, variants))
+    end
 end
 
-local parse_distinct_ms = bench_avg_ms(iters, function(i)
-    local x = distinct_pool[i]:parse()
-    return #x.definitions
-end)
+local parse_distinct_ms
+ do
+    local next_idx = 0
+    parse_distinct_ms = bench_avg_ms(iters, function()
+        next_idx = next_idx + 1
+        local x = distinct_pool[next_idx]:parse()
+        return #x.definitions
+    end)
+end
 
 local build_text_ms = bench_avg_ms(iters, function(i)
-    build_text(i + 1000, types, fields, variants)
+    return #build_text(i + 1000, types, fields, variants)
 end)
 
-local build_plus_parse_ms = bench_avg_ms(iters, function(i)
-    T.Asdl2Text.Spec(build_text(i + 2000, types, fields, variants)):parse()
-end)
+local build_plus_parse_ms
+ do
+    local next_seed = 2000
+    build_plus_parse_ms = bench_avg_ms(iters, function()
+        next_seed = next_seed + 1
+        return #T.Asdl2Text.Spec(build_text(next_seed, types, fields, variants)):parse().definitions
+    end)
+end
 
 print(string.format(
     "asdl2 parse bench iters=%d scenario=%s types=%d fields=%d variants=%d",
@@ -150,3 +171,4 @@ print(string.format("parse_existing_text_avg_ms: %.3f", parse_existing_ms))
 print(string.format("parse_distinct_text_avg_ms: %.3f", parse_distinct_ms))
 print(string.format("build_text_avg_ms: %.3f", build_text_ms))
 print(string.format("build_plus_parse_avg_ms: %.3f", build_plus_parse_ms))
+print(string.format("bench_sink=%d", BENCH_SINK))

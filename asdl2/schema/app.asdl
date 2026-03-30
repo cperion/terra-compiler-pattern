@@ -235,3 +235,103 @@ module Asdl2Machine {
         Asdl2Lowered.CacheSlot* caches
     ) unique
 }
+
+module Asdl2LuaJIT {
+
+    Schema = (
+        RecordClass* records,
+        SumClass* sums,
+        Asdl2Lowered.ArenaSlot* arenas,
+        Asdl2Lowered.CacheSlot* caches
+    ) unique
+
+    RecordClass
+        = ProductClass(
+            Asdl2Catalog.ProductHeader header,
+            string ctype_name,
+            FieldPlan* fields,
+            CachePlan cache,
+            AccessPlan access,
+            CtorPlan ctor,
+            ExportPlan export
+        )
+        | VariantClass(
+            Asdl2Catalog.VariantHeader header,
+            string ctype_name,
+            FieldPlan* fields,
+            CachePlan cache,
+            AccessPlan access,
+            CtorPlan ctor,
+            ExportPlan export
+        )
+
+    FieldPlan
+        = InlineFieldPlan(
+            string name,
+            string slot_name,
+            string c_type,
+            CheckPlan check,
+            string display_type
+        )
+        | HandleScalarFieldPlan(
+            string name,
+            string handle_field,
+            number arena_id,
+            string handle_ctype,
+            CheckPlan check,
+            string display_type
+        )
+        | HandleListFieldPlan(
+            string name,
+            string handle_field,
+            number arena_id,
+            string handle_ctype,
+            CheckPlan check,
+            string display_type
+        )
+
+    AccessPlan
+        = InlineOnlyAccess()
+        | HandleAccess(number* field_ixs)
+
+    CheckPlan
+        = AnyScalarCheck()
+        | AnyOptionalCheck()
+        | AnyListCheck()
+        | BuiltinScalarCheck(string name)
+        | BuiltinOptionalCheck(string name)
+        | BuiltinListCheck(string name)
+        | ExternalScalarCheck(string fqname)
+        | ExternalOptionalCheck(string fqname)
+        | ExternalListCheck(string fqname)
+        | ExactClassScalarCheck(number class_id)
+        | ExactClassOptionalCheck(number class_id)
+        | ExactClassListCheck(number class_id)
+        | SumFamilyScalarCheck(number family_id)
+        | SumFamilyOptionalCheck(number family_id)
+        | SumFamilyListCheck(number family_id)
+
+    CachePlan
+        = NoCachePlan()
+        | SingletonCachePlan(number cache_id)
+        | StructuralCachePlan(number cache_id, number key_arity)
+
+    CtorPlan
+        = NullaryCtorNoCache()
+        | NullaryCtorSingletonCache(number cache_id)
+        | Inline1CtorNoCache(number arg1_ix)
+        | Inline1CtorStructuralCache(number cache_id, number arg1_ix)
+        | Inline2CtorNoCache(number arg1_ix, number arg2_ix)
+        | Inline2CtorStructuralCache(number cache_id, number arg1_ix, number arg2_ix)
+        | HandleScalar1CtorNoCache(number arg1_ix)
+        | GenericCtor(number* arg_ixs, CachePlan cache)
+
+    ExportPlan
+        = CallableExport()
+        | NullaryValueExport()
+
+    SumClass = (
+        Asdl2Catalog.SumHeader header,
+        Asdl2Catalog.VariantHeader* variants
+    ) unique
+}

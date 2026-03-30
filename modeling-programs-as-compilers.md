@@ -1947,9 +1947,129 @@ Use it the same way you use the save/load test, the undo test, and the purity te
 
 ---
 
-## Part 8: The Backend-Neutral Architecture
+## Part 8: The ASDL Convergence Cycle
 
-### 8.1 The pattern is not Terra
+The ASDL goes through a predictable lifecycle. It looks alarming in the middle but converges to something surprisingly simple at the end.
+
+### 8.1 The three stages
+
+```
+DRAFT        →      EXPANSION        →      COLLAPSE
+(too coarse)        (too many types)         (just right)
+```
+
+The draft is your first attempt — top-down, based on domain intuition from Part 5. It is always too coarse. The expansion is driven by the profiler — every trace exit, every NYI, every return-to-interpreter demands a new type, a new phase, a new distinction. The collapse is driven by the expanded types themselves — once you can see all the real distinctions, you also see which ones are redundant. The final ASDL is often simpler than the draft.
+
+This is not refactoring. This is convergence. And it is safe at every step because the profiler validates each move.
+
+### 8.2 Stage 1: The draft — too coarse
+
+You model the domain top-down using the method from Part 5. You list the nouns, find the sum types, draw containment, sketch the phases. The draft captures the user's vocabulary faithfully. It passes the save/load test, the undo test, the completeness test.
+
+But it has not yet been tested against the machine. The leaves have not spoken.
+
+A typical draft might have a `Device` with `kind` as a string and `params` as a flat list. This feels clean but hides decisions behind loose bags. The leaves will tell you.
+
+### 8.3 Stage 2: The expansion — driven by the profiler
+
+You implement the leaf terminal (Part 7, leaf-first). You profile it. The profiler speaks:
+
+**"Trace exit on type check."** The leaf branches on `device.kind` — a string. Fix: `kind` should be a sum type. You expand: four variants where there was one string. The type count grows. But now each leaf is monomorphic.
+
+**"NYI: pairs() in hot path."** A leaf iterates over a parameter table. Fix: you need a resolution phase that pre-resolves the references structurally. More types. A whole new phase. But the leaf traces clean.
+
+Each layer you implement adds distinctions. The ASDL grows:
+
+```
+Draft:       3 types, 0 enums, 1 phase
+Expanded:   14 types, 4 enums, 3 phases
+```
+
+This is the scary moment. Don't simplify prematurely. The expansion is not done until every leaf traces clean and every transition compiles without resistance.
+
+### 8.4 Stage 3: The collapse — driven by structural redundancy
+
+Once the expanded ASDL is fully validated — every leaf traces clean, every transition fits the canonical shape, the memoize hit ratio is above 90% — patterns become visible:
+
+**Variants that share structure.** Several device variants all went through the same resolution step: authored parameter → computed coefficient. They collapse into fewer variants with a shared coefficient structure.
+
+**Phases that do the same verb.** Two separate phases both "resolve" — one resolves ID references, the other resolves parameter values. They can be one phase: the verb is the same.
+
+**Fields that belong on a header.** Every scheduled variant carries the same bus/state/channel fields. Those become a shared header. The variant carries only its specific payload.
+
+**Types that were modeling accidents.** Separate `MonoTrack`, `StereoTrack`, `SurroundTrack` types — but the leaves don't care about track type. They care about channel count, which is a number on the header. Three types collapse to one type with a field.
+
+After collapse:
+
+```
+Draft:       3 types, 0 enums, 1 phase
+Expanded:   14 types, 4 enums, 3 phases
+Collapsed:   8 types, 3 enums, 2 phases
+```
+
+### 8.5 Why you can't regress
+
+In a conventional codebase, simplification is dangerous. In this workflow, regression is structurally impossible at each step.
+
+**During expansion:** every new type was demanded by a leaf that couldn't trace clean. If you remove the type, the trace breaks again. You can verify this instantly.
+
+**During collapse:** every merge is validated by the profiler. Merge two types. Re-run the leaf. Does it still trace clean? Yes → the merge was correct. No → the distinction was real, undo the merge.
+
+**The memoize cache is the regression oracle.** If the memoize report shows degraded hit ratios after a change, the change broke structural sharing.
+
+**`U.inspect()` catches missing boundaries.** After any ASDL change, the inspect system tells you which boundaries are stubs.
+
+### 8.6 The deeper reason
+
+The domain is simpler than your first model of it. The draft over-models because you don't yet know which distinctions the machine actually cares about. You model what the user sees — shaped by UI conventions and jargon, not by computational structure.
+
+The expansion discovers the real distinctions — the ones the machine needs. The collapse removes the accidents — the ones that existed because you were thinking in UI categories rather than machine categories.
+
+The final ASDL captures exactly the domain's real structure:
+- every distinction that makes a leaf trace differently is a type
+- every distinction that doesn't is a field value
+- every phase consumes exactly one kind of knowledge
+- the terminal input is exactly what the machine needs, nothing more
+
+### 8.7 Practical signs
+
+**Signs you're still in expansion:**
+- leaves resist the canonical shape — they need data that isn't on their input
+- trace exits and NYI in profiled leaves
+- transitions doing two unrelated things (missing phase)
+- `U.match` arms that are nearly identical (missing shared structure)
+- boundary functions longer than 30 lines
+- memoize hit ratios below 70%
+
+**Signs you're ready for collapse:**
+- all leaves trace clean
+- all transitions fit the canonical record/enum shape
+- memoize hit ratios above 90%
+- structural similarity between types that were added separately
+- two phases have the same verb
+- the same fields appear on multiple variant types
+- some types exist only because of UI naming, not machine need
+- terminals that receive identical concrete fields for different source variants reveal redundant distinctions
+
+**Signs the collapse is done:**
+- further merges cause trace regressions (the remaining distinctions are real)
+- `U.inspect()` shows clean coverage
+- the type count is stable across several feature additions
+- new features are additive — a new variant and a new terminal, nothing else changes
+
+### 8.8 The convergence criterion
+
+The ASDL has converged when:
+
+> every leaf is a clean structural transform with no reaching, the profiler shows clean traces top to bottom, the memoize report shows 90%+ reuse, and the most recent feature additions were purely additive — one new variant, one new terminal, zero changes to existing phases.
+
+At that point, the ASDL is the architecture, and the architecture is done. New features flow through it. They don't reshape it.
+
+---
+
+## Part 9: The Backend-Neutral Architecture
+
+### 9.1 The pattern is not Terra
 
 This architecture was historically called the Terra Compiler Pattern because Terra was the environment in which it first became unmistakably visible. Terra made the compiler-like nature hard to miss: you could literally build code as code, synthesize native state layouts, and hand the result to LLVM.
 
@@ -1961,7 +2081,7 @@ None of that requires Terra specifically. Terra is one way to realize the backen
 
 Terra revealed the pattern. It did not define it.
 
-### 8.2 The three-layer architecture
+### 9.2 The three-layer architecture
 
 The architecture has three layers:
 
@@ -2000,7 +2120,7 @@ The architecture has three layers:
 
 **Layer 3: Backend** — How a leaf becomes executable code on this target. How runtime state is represented. How Units are installed and swapped. How external drivers are called. This is where Terra and LuaJIT differ.
 
-### 8.3 What should be shared across backends
+### 9.3 What should be shared across backends
 
 For a well-factored app, the following should be shared:
 
@@ -2015,7 +2135,7 @@ For a well-factored app, the following should be shared:
 
 If changing backends requires changing large parts of this core, target concerns leaked too far upward.
 
-### 8.4 What should vary across backends
+### 9.4 What should vary across backends
 
 - the exact representation of Unit
 - the exact representation of state_t
@@ -2025,7 +2145,7 @@ If changing backends requires changing large parts of this core, target concerns
 - driver integration
 - the host compiler or JIT relied upon
 
-### 8.5 Backend policy: LuaJIT by default, Terra by opt-in
+### 9.5 Backend policy: LuaJIT by default, Terra by opt-in
 
 This reframing leads to a practical policy:
 
@@ -2043,7 +2163,7 @@ LuaJIT should be the default backend on JIT-native platforms because:
 
 But LuaJIT is NOT the permissive dynamic-tables backend. The backend contract is still strict. Pure phases remain typed ASDL + pure structural transforms. Terminal leaves must lower to monomorphic LuaJIT code over typed FFI/cdata-backed state and payload layouts. If the leaf still wants arbitrary tables, missing-field checks, tag strings, or interpreter-style tree walking, the lowering is not finished.
 
-### 8.6 What makes Terra special
+### 9.6 What makes Terra special
 
 Terra becomes the opt-in strong backend when you need what only Terra gives clearly and reliably:
 
@@ -2057,7 +2177,7 @@ Terra becomes the opt-in strong backend when you need what only Terra gives clea
 
 **LLVM optimization.** Constants baked into code, dead code elimination, instruction selection, vectorization potential — LLVM continues simplifying from where the terminal left off.
 
-### 8.7 Terra as design pressure
+### 9.7 Terra as design pressure
 
 One subtle but important point: Terra matters for more than raw speed.
 
@@ -2073,7 +2193,7 @@ Once the LuaJIT backend is constrained correctly, a second statement also become
 
 The difference is that Terra provides stronger mechanical enforcement through explicit native staging, while LuaJIT provides the same pressure only if the backend rules are kept strict.
 
-### 8.8 When to opt into Terra
+### 9.8 When to opt into Terra
 
 Terra is especially worthwhile when:
 - explicit staging control matters more than build speed
@@ -2082,7 +2202,7 @@ Terra is especially worthwhile when:
 - the workload is heavy enough that LLVM compile cost is repaid by runtime throughput
 - native interop requires direct low-level expression
 
-### 8.9 A practical opt-in policy
+### 9.9 A practical opt-in policy
 
 1. Design the domain backend-neutrally
 2. Design leaves with Terra-level explicitness in mind
@@ -2093,9 +2213,9 @@ Terra is especially worthwhile when:
 
 ---
 
-## Part 9: Performance Model
+## Part 10: Performance Model
 
-### 9.1 Performance is not just steady-state throughput
+### 10.1 Performance is not just steady-state throughput
 
 Because this architecture is built around a live compile loop, performance must be understood across two dimensions:
 
@@ -2104,7 +2224,7 @@ Because this architecture is built around a live compile loop, performance must 
 
 Both matter. A backend that produces brilliant machine code but is very expensive to rebuild may be the wrong default for interactive workloads. A backend that rebuilds instantly but executes too slowly may also be wrong.
 
-### 9.2 The first performance question is architectural
+### 10.2 The first performance question is architectural
 
 In this pattern, the first useful performance question is often not "what function is hot?" but rather:
 
@@ -2121,7 +2241,7 @@ That question immediately points toward the actual architecture:
 
 These are architectural issues, not micro-optimization issues. Performance debugging often becomes a question about model boundaries and phase clarity rather than about scattered runtime heuristics.
 
-### 9.3 Rebuild cost
+### 10.3 Rebuild cost
 
 Rebuild cost is paid when the source program changes. It includes:
 
@@ -2136,13 +2256,13 @@ In interactive systems, rebuild cost is part of the user experience. Every keyst
 
 This is why cheap terminal construction matters so much. LuaJIT wins an enormous amount on rebuild cost — producing specialized closures and FFI state layouts is dramatically cheaper than an explicit LLVM-backed path.
 
-### 9.4 Run cost
+### 10.4 Run cost
 
 Run cost is the cost of the installed machine while executing: callback throughput, draw loop throughput, state access cost, arithmetic cost, memory locality in the hot path.
 
 If the installed machine is too slow, the architecture still fails. Audio callbacks at 44.1kHz, 60fps rendering, and low-latency simulation all impose hard run-cost constraints.
 
-### 9.5 The bake/live split
+### 10.5 The bake/live split
 
 One of the most useful performance questions at the terminal boundary is:
 
@@ -2166,23 +2286,23 @@ Examples: filter delay history, counters, mutable buffers, smoothing state, back
 
 The right bake/live split often determines whether a leaf feels compiled or still half interpreted.
 
-### 9.6 Narrowing sum types early helps both costs
+### 10.6 Narrowing sum types early helps both costs
 
 A wide sum type reaching the hot path hurts run cost (the machine keeps branching on semantic alternatives) and hurts rebuild cost (terminals become more complex when they must interpret broad authored structure). That is why later phases should narrow rather than widen. A good terminal input should be much more monomorphic than the authored source.
 
-### 9.7 Locality is performance
+### 10.7 Locality is performance
 
 If the source model and phases preserve locality well, then small edits change small subtrees, memoization hits stay high, terminals re-run only where necessary, and installation work stays smaller. If locality is poor, performance suffers before any low-level arithmetic question even arises.
 
 This is why stable IDs, honest containment, and structural sharing are so central to the architecture's performance story.
 
-### 9.8 The recursive benchmarking law
+### 10.8 The recursive benchmarking law
 
 Once a lower machine is trusted, the next slow boundary points upward into the language and phase design above it. The biggest performance wins often come first from better source modeling, better identity boundaries, narrower phases, better Unit granularity, and better bake/live decisions — and only after those are right do low-level backend optimizations pay their full value.
 
 A poor source model can waste more performance than a clever arithmetic trick can recover. A missing phase can cost more than a backend micro-optimization can save. A bad Unit boundary can dominate everything downstream.
 
-### 9.9 The memoize-hit-ratio test
+### 10.9 The memoize-hit-ratio test
 
 There is also a highly practical metric that sits between modeling and performance:
 
@@ -2196,7 +2316,7 @@ Instrumentation through `U.memo_report()`, `U.memo_measure_edit()`, and `U.memo_
 - **70–90% reuse** — healthy but worth inspecting
 - **below 50% reuse** — the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
 
-### 9.10 Backend-specific performance questions
+### 10.10 Backend-specific performance questions
 
 **LuaJIT-oriented:** Are the emitted closures monomorphic enough to trace well? Are important constants captured in upvalues? Is state access stable and cheap via FFI? Are loops and composition shapes simple enough for the JIT?
 
@@ -2206,7 +2326,7 @@ Different questions, same architectural frame.
 
 ---
 
-## Part 10: What the Pattern Eliminates
+## Part 11: What the Pattern Eliminates
 
 The pattern does not eliminate complexity by pretending complex programs are simple. It eliminates infrastructure by removing the architectural conditions that made so much coordinating machinery necessary in the first place.
 
@@ -2214,45 +2334,45 @@ In many conventional designs, a large amount of system complexity exists because
 
 The compiler pattern reduces that need because the source program is explicit, interaction is explicit, phase boundaries are explicit, compiled artifacts are explicit, state ownership is explicit, and recompilation is driven structurally rather than by ad hoc invalidation protocols.
 
-### 10.1 State management frameworks
+### 11.1 State management frameworks
 
 Centralized stores that become shadow architectures, action/effect plumbing, observer-heavy propagation systems, elaborate consistency protocols between multiple runtime models. In the compiler pattern, the source ASDL is the authored program, Apply computes the next source ASDL, later phases derive what should run. The state is no longer architecturally mysterious. You do not need meta-infrastructure just to answer "what is the application right now?"
 
-### 10.2 Invalidation frameworks
+### 11.2 Invalidation frameworks
 
 Complex machinery to track what changed, what needs recomputation, what caches must be repaired. In this pattern, structural identity plus memoized boundaries handle it: unchanged nodes hit the cache, changed nodes miss it. Incrementality is not a second architecture bolted onto the first one.
 
-### 10.3 Observer buses and event-dispatch webs
+### 11.3 Observer buses and event-dispatch webs
 
 Listeners, subscriptions, bubbling systems, change-notification graphs. Much of this becomes unnecessary when inputs are modeled as Event ASDL, Apply is the explicit state transition, and later phases rederive consequences structurally. Instead of "notify everyone who might care and let them each mutate their corner," the story is: represent what happened explicitly, compute the next program, recompile the consequences.
 
-### 10.4 Dependency-injection containers and service-locator architecture
+### 11.4 Dependency-injection containers and service-locator architecture
 
 Global service access accumulates because key functions cannot get the information they need structurally from their inputs. Service containers, DI graphs, registries passed everywhere, context objects threaded through all operations. These are often symptoms that the source model or phase structure is underspecified — missing source fields, missing resolution phases, hidden cross-references. The better fix is architectural, not infrastructural.
 
-### 10.5 Hand-built runtime interpretation layers
+### 11.5 Hand-built runtime interpretation layers
 
 Perhaps the biggest elimination: the accidental interpreter itself. Dynamic dispatch tables over variants, generic node walkers asking "what are you?" repeatedly, runtime graph traversals rediscovering semantic facts, renderer-style command systems that are really uncompiled authored trees, general callback routers deciding domain behavior on the fly. The compiler pattern consumes that uncertainty earlier. By the time execution runs, those questions should already have been answered.
 
-### 10.6 Redundant test scaffolding
+### 11.6 Redundant test scaffolding
 
 Mocks for services, fake runtime environments, setup frameworks, elaborate fixtures standing in for global state. In the pure layer, tests reduce to: construct ASDL input, call function, assert output. When such tests become difficult, something hidden is leaking into the supposedly pure layer.
 
-### 10.7 Redundant runtime ownership machinery
+### 11.7 Redundant runtime ownership machinery
 
 External state registries, independent lifecycle managers for compiled children, detached runtime objects mirroring compiled structure. Because Units pair behavior with owned runtime state, lifecycle concerns are more often represented structurally by the Unit composition itself rather than by a second architecture.
 
-### 10.8 The general principle
+### 11.8 The general principle
 
 > The pattern eliminates glue whose only job was to reconnect truths that should never have been split apart.
 
 If authored truth and semantic truth are explicitly connected by transitions, less glue. If compiled behavior and state ownership are one Unit, less glue. If change propagation is handled by identity plus memoization, less glue. If interaction is an explicit Event language, less glue.
 
-### 10.9 What does not disappear
+### 11.9 What does not disappear
 
 The pattern does not eliminate: the need for careful domain modeling, backend engineering, integration with drivers/OS/graphics/audio, operational error handling, performance work, or judgment about phase design and Unit granularity. It moves complexity to places where it is more explicit, more local, and more meaningful.
 
-### 10.10 A warning against reintroducing the eliminated machinery
+### 11.10 A warning against reintroducing the eliminated machinery
 
 Once the pattern starts simplifying a codebase, there is a temptation to reintroduce the old furniture by habit: adding a state manager where the source ASDL should suffice, adding an observer bus where Event ASDL + Apply should suffice, adding invalidation flags where identity + memoize should suffice, adding a service container where a resolution phase should suffice, adding runtime registries where Unit composition should suffice.
 
@@ -2260,9 +2380,9 @@ Sometimes these tools are genuinely needed at specific backend boundaries. But t
 
 ---
 
-## Part 11: Worked Examples
+## Part 12: Worked Examples
 
-### 11.1 Text editor
+### 12.1 Text editor
 
 **Nouns**: document, paragraph, heading, list, code block, text run, character, cursor, selection, font, style, image, link
 
@@ -2330,7 +2450,7 @@ module Editor {
 - Search/replace: new Line nodes for affected lines only → 3 replacements in 10,000 lines recompiles 3 lines
 - Parallelism: independent Blocks compile in parallel — the ASDL tree is the execution plan
 
-### 11.2 Spreadsheet
+### 12.2 Spreadsheet
 
 **Sum types**:
 ```
@@ -2363,7 +2483,7 @@ Compiled:     Unit that renders the grid to GPU
 - Parallel evaluation: independent subgraphs of the dependency DAG evaluate in parallel, no scheduler needed
 - Charts as second terminal: same cell data → chart rendering pipeline, memoized independently, change a cell → chart recompiles incrementally
 
-### 11.3 Drawing / vector graphics app
+### 12.3 Drawing / vector graphics app
 
 **Sum types**:
 ```
@@ -2392,7 +2512,7 @@ Compiled:   Unit that renders to GPU
 - Export to multiple formats: SVG, PDF, PNG are different terminal boundaries from the same ASDL → target is a memoize key
 - Zoom/pan: viewport-independent shape compilation + viewport-dependent projection → zoom is a cache hit on all shapes
 
-### 11.4 Game / simulation
+### 12.4 Game / simulation
 
 **Sum types**:
 ```
@@ -2427,61 +2547,61 @@ This is a subtlety: not everything can be baked. Per-frame-changing values (phys
 
 ---
 
-## Part 12: What You Can Build
+## Part 13: What You Can Build
 
 The pattern is applicable anywhere the user is editing a structured program in some domain and where repeated specialization is a better architectural fit than repeated interpretation.
 
 The general rule: a good domain for this pattern has structured persistent domain objects with meaningful identity and relationships, interaction that changes the authored program over time, later computation that depends on derived semantic decisions, a final runtime workload that benefits from specialization, and where repeated interpretation of the full domain structure would be wasteful or architecturally messy.
 
-### 12.1 Audio tools and synthesizers
+### 13.1 Audio tools and synthesizers
 
 Audio is one of the clearest fits. The domain naturally has explicit user-authored structure, graph or chain composition, stable identities for devices/clips/nodes/parameters, derived semantic phases (resolution, scheduling, coefficient computation), and a hot execution path where repeated interpretation is undesirable. Synth graphs, effects chains, modular routing, sequencers, DAWs, live performance tools.
 
-### 12.2 Text editors and structured editors
+### 13.2 Text editors and structured editors
 
 A serious editor contains rich structure: documents, blocks, spans, cursors, selections, marks, style rules, folding state. Events edit that structure: insert, delete, move cursor, change selection, apply formatting. Later phases resolve styles, shape text, compute line layout, derive paint-ready runs, produce hit-test structures. The visual execution layer benefits from receiving something much narrower than the raw authored model. Especially compelling in structured editors where the source is richer than text.
 
-### 12.3 UI systems and retained declarative interfaces
+### 13.3 UI systems and retained declarative interfaces
 
 A retained UI tree is already very close to a source program. It contains nodes, layout declarations, visual style, content, interaction bindings, view state. Events edit it, phases resolve styles/bindings, compute layout, flatten paint operations, produce draw/hit-test Units. The same architecture that drives an audio compiler drives a UI compiler — different source vocabulary, same compilation story.
 
-### 12.4 Spreadsheets and notebooks
+### 13.4 Spreadsheets and notebooks
 
 Sheets, cells, formulas, charts, formatting rules. Formulas parse to expression trees, references validate into dependency graphs, evaluation IS compilation. The compiled spreadsheet doesn't interpret formulas — it runs a native function that produces all cell values. Notebooks extend this with richer cell types and execution semantics.
 
-### 12.5 Drawing and scene editors
+### 13.5 Drawing and scene editors
 
 Shapes with transforms, styles, layers. Transforms resolve to absolute, groups flatten, bounds compute, text shapes, draw calls sort by GPU efficiency. The same compilation pipeline as UI — different source vocabulary (artistic properties vs layout properties), same draw-call terminal.
 
-### 12.6 Protocol engines and structured communication
+### 13.6 Protocol engines and structured communication
 
 If a system processes structured messages through semantic phases — validate, bind, classify, route, respond — it may fit the compiler shape. Source model may be session or protocol state, events are incoming messages, phases resolve and classify, terminals produce specialized handlers.
 
-### 12.7 Simulations and live-authored systems
+### 13.7 Simulations and live-authored systems
 
 Scenario editors, physics setup tools, rule-based world configuration, interactive simulations with authored entities and behaviors. Source model contains entities, relationships, parameters, scenario structure. Later phases validate references, classify behavior families, derive execution schedules, compile step/query/render Units.
 
-### 12.8 Multi-output tools
+### 13.8 Multi-output tools
 
 Tools where the same source program feeds multiple outputs: execution, editor view, inspector/debugger, export/build artifacts. The architecture already assumes multiple memoized products from the same source. This is much cleaner than inventing several loosely synchronized models that each think they are the real app state.
 
-### 12.9 The applicability test
+### 13.9 The applicability test
 
 The right question is not "is my domain like audio codegen?" The right question is:
 
 > is my user editing a structured program whose meaning I keep rediscovering at runtime, and would it be better to compile that meaning into narrower machines?
 
-### 12.10 What is a weaker fit
+### 13.10 What is a weaker fit
 
 The pattern is a weaker fit when there is little or no persistent authored structure, no meaningful phase boundaries, execution is inherently generic and does not benefit from specialization, the domain is mostly ad hoc dynamic scripting with little stable semantic structure, or the cost of modeling the source language exceeds the value of the resulting clarity.
 
 ---
 
-## Part 13: The Master Checklist
+## Part 14: The Master Checklist
 
 Before writing any implementation, answer these questions about your source ASDL:
 
-### 13.1 Domain nouns
+### 14.1 Domain nouns
 ```
 □ Listed every user-visible noun
 □ Classified each as identity noun or property
@@ -2490,7 +2610,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No implementation nouns in the source (no buffers, threads, callbacks)
 ```
 
-### 13.2 Sum types
+### 14.2 Sum types
 ```
 □ Every "or" in the domain is an enum
 □ Every enum has ≥ 2 variants
@@ -2500,7 +2620,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Every user action produces a valid variant
 ```
 
-### 13.3 Containment
+### 14.3 Containment
 ```
 □ Drawn the containment tree
 □ Each parent owns its children (no shared ownership)
@@ -2509,7 +2629,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Recursive types use * or ? (no infinite structs)
 ```
 
-### 13.4 Phases
+### 14.4 Phases
 ```
 □ Named each phase
 □ Named each transition verb (lower, resolve, classify, schedule, compile)
@@ -2520,7 +2640,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No phase should be split without a clear additional decision to resolve
 ```
 
-### 13.5 Coupling points
+### 14.5 Coupling points
 ```
 □ Identified every place where two subtrees need each other's information
 □ Determined which must be resolved in the same phase
@@ -2528,7 +2648,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ These orderings are consistent (no cycles between phases)
 ```
 
-### 13.6 Quality tests
+### 14.6 Quality tests
 ```
 □ Save/load: every user-visible aspect survives round-trip
 □ Undo: reverting to previous ASDL node restores everything
@@ -2540,7 +2660,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No function needs mocks, fixtures, setup, teardown, or ordering
 ```
 
-### 13.7 Incremental compilation
+### 14.7 Incremental compilation
 ```
 □ ASDL types are marked unique
 □ Edits produce new nodes with structural sharing (not deep copy)
@@ -2549,7 +2669,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Unchanged subtrees are identical Lua objects (not copies)
 ```
 
-### 13.8 Parallelism
+### 14.8 Parallelism
 ```
 □ Independent subtrees can compile in parallel (no shared mutable state)
 □ Memoize boundaries align with parallelism units (one per identity noun)
@@ -2557,7 +2677,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No implicit ordering between independent branches
 ```
 
-### 13.9 Purity enforcement
+### 14.9 Purity enforcement
 ```
 □ Every boundary is a pure structural transform
 □ Every boundary uses the canonical shape (record or enum)
@@ -2568,7 +2688,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ If a boundary resists the canonical shape → fix the ASDL, not the code
 ```
 
-### 13.10 Compilation/execution split
+### 14.10 Compilation/execution split
 ```
 □ Each function is either deciding what machine should exist or being the machine
 □ Compilation-side code is pure, structural, memoized
@@ -2577,7 +2697,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Terminals are on the compilation side, even though they produce executable artifacts
 ```
 
-### 13.11 Unit design
+### 14.11 Unit design
 ```
 □ Each terminal produces a Unit { fn, state_t }
 □ state_t contains only execution-time mutable data, not authored choices
@@ -2586,7 +2706,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Unit composition reflects source containment structure
 ```
 
-### 13.12 Machine IR (when applicable)
+### 14.12 Machine IR (when applicable)
 ```
 □ Terminal input makes order, addressability, use-sites, resource identity, and state needs explicit
 □ The machine receives typed shapes, not generic wiring it must interpret
@@ -2594,7 +2714,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ If later branches need different aspects, facets carry orthogonal semantic planes
 ```
 
-### 13.13 View / UI
+### 14.13 View / UI
 ```
 □ View is a separate ASDL, projected from source
 □ View elements carry semantic refs back to source
@@ -2602,7 +2722,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Errors flow from domain pipeline to View via semantic refs
 ```
 
-### 13.14 Implementation discovery (leaves-up)
+### 14.14 Implementation discovery (leaves-up)
 ```
 □ Started at leaf compilers, not at top-level pipeline
 □ Each leaf compiles as a clean structural transform — no reaching, no context args
@@ -2670,8 +2790,9 @@ THE MODELING METHOD
 
 12. CONVERGE
     Steps 1-10 give a top-down draft. Step 11 tests it bottom-up.
+    The ASDL expands under profiler pressure, then collapses
+    as structural redundancy becomes visible (Part 8).
     The ASDL stabilizes when leaves stop demanding changes.
-    Design and implementation interleave until convergence.
 ```
 
 The hard part is steps 1-10. Step 11 is where the leaves either confirm the design is right or send you back to fix it. The direction is bottom-up: write the leaf you want to write, discover what it needs, modify each layer above to provide it, recurse to the source ASDL. Steps 1-10 tell you WHERE to look. Step 11 tells you WHAT to put there. When the ASDL is correct, every leaf is a natural pure structural transform and every phase transition is obvious. When it's not, the leaf resistance is the signal — and it arrives in 10 lines, not 500. The ASDL is the architecture. The leaves are the proof.
