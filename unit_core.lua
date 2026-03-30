@@ -3,7 +3,7 @@
 -- Backend-independent pure helpers for the compiler pattern.
 --
 -- This module owns the functional layer shared by backends:
---   - LuaFun combinators
+--   - canonical gen/param/state traversal helpers
 --   - identity-based memoize
 --   - boundary wrappers
 --   - error collection
@@ -39,8 +39,7 @@ function M.new()
     local next_fn = next
     local debug_getinfo = debug and debug.getinfo
 
-    local fun = require("fun")
-    local iter = fun.iter
+    local iterator_mt = {}
     local ipairs_gen = ipairs({})
     local pairs_gen = pairs({ a = 0 })
 
@@ -87,8 +86,23 @@ function M.new()
         return state_x, fun_fn(acc, ...)
     end
 
-    U.fun = fun
-    U.iter = iter
+    local function wrap(gen, param, state)
+        return setmetatable({
+            gen = gen,
+            param = param,
+            state = state,
+        }, iterator_mt)
+    end
+
+    function U.iter(obj, param, state)
+        local gen, iter_param, iter_state = rawiter(obj, param, state)
+        return wrap(gen, iter_param, iter_state)
+    end
+
+    function U.wrap(gen, param, state)
+        return wrap(gen, param, state)
+    end
+
     U.rawiter = rawiter
 
     function U.each(xs, fn)
@@ -156,6 +170,151 @@ function M.new()
         return out
     end
 
+    function U.copy(xs)
+        if xs == nil then return {} end
+        return U.map(xs, function(...)
+            return ...
+        end)
+    end
+
+    function U.map_into(dst, xs, fn)
+        if type_fn(dst) ~= "table" then
+            error("U.map_into: dst must be a table", 2)
+        end
+        if xs == nil then return dst end
+
+        if type_fn(xs) == "table" and getmetatable_fn(xs) == nil then
+            local n = #xs
+            local j = #dst
+            if n > 0 then
+                for i = 1, n do
+                    j = j + 1
+                    dst[j] = fn(xs[i])
+                end
+                return dst
+            end
+            for k, v in next_fn, xs do
+                j = j + 1
+                dst[j] = fn(k, v)
+            end
+            return dst
+        end
+
+        local gen, param, state = rawiter(xs)
+        local j = #dst
+        while true do
+            local mapped
+            state, mapped = call_if_not_empty(fn, gen(param, state))
+            if state == nil then break end
+            j = j + 1
+            dst[j] = mapped
+        end
+        return dst
+    end
+
+    function U.filter_map_into(dst, xs, fn)
+        if type_fn(dst) ~= "table" then
+            error("U.filter_map_into: dst must be a table", 2)
+        end
+        if xs == nil then return dst end
+
+        if type_fn(xs) == "table" and getmetatable_fn(xs) == nil then
+            local n = #xs
+            local j = #dst
+            if n > 0 then
+                for i = 1, n do
+                    local mapped = fn(xs[i])
+                    if mapped ~= nil then
+                        j = j + 1
+                        dst[j] = mapped
+                    end
+                end
+                return dst
+            end
+            for k, v in next_fn, xs do
+                local mapped = fn(k, v)
+                if mapped ~= nil then
+                    j = j + 1
+                    dst[j] = mapped
+                end
+            end
+            return dst
+        end
+
+        local gen, param, state = rawiter(xs)
+        local j = #dst
+        while true do
+            local state_x, a, b, c, d, e = gen(param, state)
+            state = state_x
+            if state == nil then break end
+            local mapped = fn(a, b, c, d, e)
+            if mapped ~= nil then
+                j = j + 1
+                dst[j] = mapped
+            end
+        end
+        return dst
+    end
+
+    function U.find(xs, pred)
+        if xs == nil then return nil end
+
+        if type_fn(xs) == "table" and getmetatable_fn(xs) == nil then
+            local n = #xs
+            if n > 0 then
+                for i = 1, n do
+                    local x = xs[i]
+                    if pred(x) then return x end
+                end
+                return nil
+            end
+            for k, v in next_fn, xs do
+                if pred(k, v) then return k, v end
+            end
+            return nil
+        end
+
+        local gen, param, state = rawiter(xs)
+        while true do
+            local state_x, a, b, c, d, e = gen(param, state)
+            state = state_x
+            if state == nil then return nil end
+            if pred(a, b, c, d, e) then return a, b, c, d, e end
+        end
+    end
+
+    function U.any(xs, pred)
+        pred = pred or function(v) return v end
+        return U.find(xs, pred) ~= nil
+    end
+
+    function U.all(xs, pred)
+        pred = pred or function(v) return v end
+        if xs == nil then return true end
+
+        if type_fn(xs) == "table" and getmetatable_fn(xs) == nil then
+            local n = #xs
+            if n > 0 then
+                for i = 1, n do
+                    if not pred(xs[i]) then return false end
+                end
+                return true
+            end
+            for k, v in next_fn, xs do
+                if not pred(k, v) then return false end
+            end
+            return true
+        end
+
+        local gen, param, state = rawiter(xs)
+        while true do
+            local state_x, a, b, c, d, e = gen(param, state)
+            state = state_x
+            if state == nil then return true end
+            if not pred(a, b, c, d, e) then return false end
+        end
+    end
+
     function U.reverse_each(xs, fn)
         for i = #xs, 1, -1 do
             fn(xs[i], i)
@@ -168,7 +327,7 @@ function M.new()
 
         U.each(tables, function(t)
             if type(t) == "table" then
-                iter(t):each(function(name)
+                U.each(t, function(name)
                     if not seen[name] then
                         seen[name] = true
                         names[#names + 1] = name
@@ -446,11 +605,13 @@ function M.new()
             end)
         end
 
+        local HR72 = string.rep("═", 72)
+        local HR60 = string.rep("═", 60)
+        local RULE72 = string.rep("─", 72)
+        local RULE60 = string.rep("─", 60)
+
         local function sorted_stats()
-            local copy = {}
-            U.each(memo_stats_registry, function(stats)
-                copy[#copy + 1] = stats
-            end)
+            local copy = U.copy(memo_stats_registry)
             table.sort(copy, function(a, b)
                 local ar = a.calls > 0 and (a.hits / a.calls) or 0
                 local br = b.calls > 0 and (b.hits / b.calls) or 0
@@ -462,32 +623,36 @@ function M.new()
 
         function I.report()
             local lines = {}
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "MEMOIZE REPORT"
-            lines[#lines + 1] = string.rep("═", 72)
-            lines[#lines + 1] = string.format(
-                "  %-30s  %6s  %6s  %6s  %7s",
+            local function add(line)
+                lines[#lines + 1] = line
+            end
+            local function addf(fmt, ...)
+                lines[#lines + 1] = string.format(fmt, ...)
+            end
+
+            add("")
+            add("MEMOIZE REPORT")
+            add(HR72)
+            addf("  %-30s  %6s  %6s  %6s  %7s",
                 "boundary", "calls", "hits", "miss", "hit %")
-            lines[#lines + 1] = string.rep("─", 72)
+            add(RULE72)
 
             local total_calls, total_hits, total_misses = 0, 0, 0
             U.each(sorted_stats(), function(stats)
                 local ratio = stats.calls > 0 and (stats.hits / stats.calls * 100) or 0
                 local indicator = ratio >= 80 and "✓" or (ratio >= 50 and "△" or "✗")
-                lines[#lines + 1] = string.format(
-                    "%s %-30s  %6d  %6d  %6d  %6.1f%%",
+                addf("%s %-30s  %6d  %6d  %6d  %6.1f%%",
                     indicator, stats.name, stats.calls, stats.hits, stats.misses, ratio)
                 total_calls = total_calls + stats.calls
                 total_hits = total_hits + stats.hits
                 total_misses = total_misses + stats.misses
             end)
 
-            lines[#lines + 1] = string.rep("─", 72)
+            add(RULE72)
             local total_ratio = total_calls > 0 and (total_hits / total_calls * 100) or 0
-            lines[#lines + 1] = string.format(
-                "  %-30s  %6d  %6d  %6d  %6.1f%%",
+            addf("  %-30s  %6d  %6d  %6d  %6.1f%%",
                 "TOTAL", total_calls, total_hits, total_misses, total_ratio)
-            lines[#lines + 1] = ""
+            add("")
             return table.concat(lines, "\n")
         end
 
@@ -496,41 +661,52 @@ function M.new()
             edit_fn()
 
             local lines = {}
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "EDIT: " .. description
-            lines[#lines + 1] = string.rep("─", 60)
+            local function add(line)
+                lines[#lines + 1] = line
+            end
+            local function addf(fmt, ...)
+                lines[#lines + 1] = string.format(fmt, ...)
+            end
+
+            add("")
+            add("EDIT: " .. description)
+            add(RULE60)
 
             local total_calls, total_misses = 0, 0
             U.each(memo_stats_registry, function(stats)
                 total_calls = total_calls + stats.calls
                 total_misses = total_misses + stats.misses
                 if stats.misses > 0 then
-                    lines[#lines + 1] = string.format(
-                        "  RECOMPILED: %-25s  %d/%d",
+                    addf("  RECOMPILED: %-25s  %d/%d",
                         stats.name, stats.misses, stats.calls)
                     if stats.last_miss_reason then
-                        lines[#lines + 1] = "              reason: " .. stats.last_miss_reason
+                        add("              reason: " .. stats.last_miss_reason)
                     end
                 end
             end)
 
             local reuse = total_calls > 0 and ((total_calls - total_misses) / total_calls * 100) or 0
-            lines[#lines + 1] = string.rep("─", 60)
-            lines[#lines + 1] = string.format(
-                "  Reuse: %d/%d (%.1f%%)",
+            add(RULE60)
+            addf("  Reuse: %d/%d (%.1f%%)",
                 total_calls - total_misses, total_calls, reuse)
-            lines[#lines + 1] = string.format(
-                "  Work:  %d recompilations out of %d calls",
+            addf("  Work:  %d recompilations out of %d calls",
                 total_misses, total_calls)
-            lines[#lines + 1] = ""
+            add("")
             return table.concat(lines, "\n")
         end
 
         function I.quality()
             local lines = {}
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "DESIGN QUALITY"
-            lines[#lines + 1] = string.rep("═", 60)
+            local function add(line)
+                lines[#lines + 1] = line
+            end
+            local function addf(fmt, ...)
+                lines[#lines + 1] = string.format(fmt, ...)
+            end
+
+            add("")
+            add("DESIGN QUALITY")
+            add(HR60)
 
             local total_hits, total_calls = 0, 0
             U.each(memo_stats_registry, function(stats)
@@ -538,8 +714,7 @@ function M.new()
                 total_calls = total_calls + stats.calls
             end)
             local overall = total_calls > 0 and (total_hits / total_calls * 100) or 0
-            lines[#lines + 1] = string.format(
-                "  Overall cache hit ratio:     %6.1f%%", overall)
+            addf("  Overall cache hit ratio:     %6.1f%%", overall)
 
             local worst_name = "none"
             local worst_ratio = 100
@@ -553,32 +728,30 @@ function M.new()
                 end
             end)
             if worst_name == "none" then worst_ratio = 0 end
-            lines[#lines + 1] = string.format(
-                "  Worst boundary:              %s (%.1f%%)",
+            addf("  Worst boundary:              %s (%.1f%%)",
                 worst_name, worst_ratio)
 
             local total_entries = 0
             U.each(memo_stats_registry, function(stats)
                 total_entries = total_entries + stats.unique_keys
             end)
-            lines[#lines + 1] = string.format(
-                "  Cache entries:               %d", total_entries)
-            lines[#lines + 1] = ""
+            addf("  Cache entries:               %d", total_entries)
+            add("")
 
             if overall >= 90 then
-                lines[#lines + 1] = "  ✓ EXCELLENT: ASDL decomposition is well-suited for incremental compilation."
+                add("  ✓ EXCELLENT: ASDL decomposition is well-suited for incremental compilation.")
             elseif overall >= 70 then
-                lines[#lines + 1] = "  △ GOOD: Most edits reuse cached results."
-                lines[#lines + 1] = "    Check '" .. worst_name .. "' — it may have too-coarse granularity."
+                add("  △ GOOD: Most edits reuse cached results.")
+                add("    Check '" .. worst_name .. "' — it may have too-coarse granularity.")
             elseif overall >= 50 then
-                lines[#lines + 1] = "  △ FAIR: Significant recompilation per edit."
-                lines[#lines + 1] = "    Consider splitting coarse-grained types into finer ASDL nodes."
+                add("  △ FAIR: Significant recompilation per edit.")
+                add("    Consider splitting coarse-grained types into finer ASDL nodes.")
             else
-                lines[#lines + 1] = "  ✗ POOR: Most calls miss the cache."
-                lines[#lines + 1] = "    The ASDL decomposition is too coarse, structural sharing is broken, or memoize keys include volatile data."
+                add("  ✗ POOR: Most calls miss the cache.")
+                add("    The ASDL decomposition is too coarse, structural sharing is broken, or memoize keys include volatile data.")
             end
 
-            lines[#lines + 1] = ""
+            add("")
             return table.concat(lines, "\n")
         end
 

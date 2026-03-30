@@ -1,0 +1,51 @@
+#!/usr/bin/env luvit
+
+-- jsrun — a tiny Node.js-compatible JS runtime
+--
+-- Usage:
+--   ./examples/js/jsrun <script.js>
+--   ./examples/js/jsrun -e "console.log('hello')"
+--
+-- Architecture:
+--   LuaJIT + libuv (luvit) + js.lua compiler = a JS runtime
+--   Same event loop as Node. Same I/O. Different JS engine.
+
+-- Find repo root from script location
+local script_dir = module.dir or "."
+local repo_root = script_dir:match("(.+)/examples/js$") or script_dir:match("(.+)/examples/js/$") or "."
+
+package.path = table.concat({
+    repo_root .. "/?.lua",
+    repo_root .. "/?/init.lua",
+    package.path,
+}, ";")
+
+local jsnode = require('examples.js.js_node')
+
+local script = args[1]
+
+if not script then
+    print("jsrun — tiny Node.js-compatible JS runtime")
+    print("usage: jsrun <script.js>")
+    print("       jsrun -e \"console.log('hello')\"")
+    process.exit(1)
+end
+
+if script == "-e" then
+    local source = args[2]
+    if not source then
+        io.stderr:write("jsrun -e: missing expression\n")
+        process.exit(1)
+    end
+    local ok, err = pcall(jsnode.run_string, source)
+    if not ok then
+        io.stderr:write("Error: " .. tostring(err) .. "\n")
+        process.exit(1)
+    end
+else
+    local ok, err = pcall(jsnode.run_file, script)
+    if not ok then
+        io.stderr:write("Error: " .. tostring(err) .. "\n")
+        process.exit(1)
+    end
+end

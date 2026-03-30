@@ -1,20 +1,32 @@
-# Modeling Programs as Compilers — The Design Method
+# Modeling Programs as Compilers
 
-## The hard part is not the pattern. The hard part is the ASDL.
+## Part 1: The Core Insight
 
-Historically, this repository called the architecture the Terra Compiler Pattern. But the modeling method described here is backend-neutral. The six architectural primitives are still the same in spirit: ASDL `unique`, Event ASDL, Apply, memoized stage boundaries, LuaFun-style pure transforms, and Unit. The implementation is small, and the real `unit.t` includes `Unit.inspect(...)` so progress, docs, scaffolds, prompts, and tests are derived directly from the ASDL and installed methods. They produce incremental multi-stage compilers with hot-swap, state management, error handling, and zero-alloc execution — all as emergent properties of composition.
+### 1.1 The ASDL is a language
 
-But the primitives are tools. They don't tell you WHAT to compile. They don't tell you what your types should be. They don't tell you what phases to define. They don't tell you where knowledge is consumed. They don't tell you which sum types to create or when to eliminate them.
+The ASDL is not a data format. It is not a schema. It is not a description of what the program stores.
 
-That's the hard part. And it must be done RIGHT, upfront, before a single line of implementation. Because the ASDL IS the architecture. A wrong type in the source phase propagates through every phase, every boundary, every compiled output. You can't refactor a phase boundary after 50 functions depend on it. The cost of a wrong early decision compounds through the entire pipeline.
+The ASDL is a LANGUAGE.
 
-This document is about how to make those decisions.
+The source ASDL is the input language of a compiler. The user is the programmer. The UI is the IDE. Every user gesture is a program edit. Every edit produces a new program (a new ASDL tree). The compiler compiles it. The output runs.
 
----
+Getting the ASDL right means getting the LANGUAGE right. A good language has:
+- Clear nouns (types that correspond to domain concepts)
+- Clear verbs (edits that produce new valid programs)
+- Orthogonal features (independent fields that don't interfere)
+- Completeness (every valid state is expressible)
+- Minimality (no redundancy, no derived values)
+- Composability (small pieces combine into larger programs)
 
-## 1. First Principles
+These are the same properties that make a PROGRAMMING LANGUAGE good. Because that's what the source ASDL is — a domain-specific programming language whose programs are domain artifacts (songs, documents, spreadsheets, games) and whose compiler produces executables that realize those artifacts.
 
-### 1.1 A program is a function from user intent to machine execution
+Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. The Unit is the object code.
+
+And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, and the same transitions can realize Terra/LLVM native code, LuaJIT-specialized closures, JavaScript, or WASM. Only the leaf compilation — the terminal boundary where ASDL becomes executable machinery — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
+
+Design the language well, and the compiler writes itself. Design it poorly, and no amount of implementation effort can fix it. The ASDL is the architecture. Everything else is derived.
+
+### 1.2 A program is a function from user intent to machine execution
 
 Every interactive program takes human gestures (clicks, keystrokes, drags, voice commands) and produces machine behavior (pixels on screen, samples to speakers, bytes to network, commands to hardware).
 
@@ -24,7 +36,7 @@ Traditional programs bridge the gap at runtime, every frame, with dispatch table
 
 The compiler pattern bridges the gap at edit time, once, by COMPILING the user's intent into a specialized executable machine. On Terra that may be explicit native code. On LuaJIT it may be a highly specialized closure and state layout that the host JIT compiles aggressively. The compiled result runs until the intent changes. When it changes, the compiler runs again (incrementally — only the changed subtree).
 
-### 1.2 The gap has layers
+### 1.3 The gap has layers
 
 The gap between intent and execution is never one step. There are always intermediate representations — levels of knowledge between "what the user said" and "what the machine does."
 
@@ -42,13 +54,13 @@ Machine code:     Terra fn / LuaJIT-specialized loop: y = 0.067*x + 0.135*x1 + 0
 
 Each layer consumes knowledge — it resolves a decision that the layer above left open. The UI layer knows the user said "Biquad." The semantic layer resolves what that means in the graph. The execution plan computes the coefficients. The machine code bakes them as constants.
 
-### 1.3 These layers ARE your phases
+### 1.4 These layers ARE your phases
 
 Each layer is an ASDL module. Each transition between layers is a memoized function. The phases are not arbitrary — they reflect the actual structure of knowledge resolution in your domain.
 
 The question "how many phases should I have?" is answered by: "how many distinct levels of knowledge resolution does your domain have?" Not more. Not fewer. Each phase should consume at least one meaningful decision. If a phase doesn't resolve anything, it shouldn't exist. If a phase resolves two unrelated things, it should be two phases.
 
-### 1.4 The source phase is the most important
+### 1.5 The source phase is the most important
 
 The source phase — the first phase, the one the user edits — determines everything. It is the input language of your compiler. Every other phase is derived from it. Every boundary transforms it. Every Unit compiles it.
 
@@ -56,11 +68,409 @@ If the source phase is wrong — if it models the wrong concepts, or models them
 
 Getting the source phase right requires understanding the domain deeply enough to answer: "what are the NOUNS of this domain?" Not the implementation nouns (buffers, callbacks, handlers). The DOMAIN nouns (tracks, clips, parameters, curves, connections, constraints). The things the USER thinks about. The things that appear in the UI. The things that get saved to disk and loaded back.
 
+### 1.6 The hard part
+
+The architectural primitives — ASDL `unique`, Event ASDL, Apply, memoized stage boundaries, pure structural transforms, and Unit — are tools. They don't tell you WHAT to compile. They don't tell you what your types should be. They don't tell you what phases to define. They don't tell you where knowledge is consumed. They don't tell you which sum types to create or when to eliminate them.
+
+That's the hard part. And it must be done RIGHT, upfront, before a single line of implementation. Because the ASDL IS the architecture. A wrong type in the source phase propagates through every phase, every boundary, every compiled output. You can't refactor a phase boundary after 50 functions depend on it. The cost of a wrong early decision compounds through the entire pipeline.
+
+This document is about how to make those design decisions — and about the architecture that makes them pay off.
+
 ---
 
-## 2. The Modeling Method
+## Part 2: The Six Concepts and the Live Loop
 
-### 2.1 Step 1: List the nouns
+The pattern is built from six concepts. They are small enough to state in a paragraph each and powerful enough to organize an entire interactive application.
+
+### 2.1 Source ASDL
+
+This is what the program IS — the user-authored, user-visible, persistent model of the domain.
+
+In a music tool: tracks, clips, devices, routings, parameters. In a text editor: document, blocks, spans, cursors, selections. In a UI system: widgets, layout declarations, paint declarations, bindings. In a spreadsheet: sheets, cells, formulas, formatting rules, charts.
+
+The source ASDL is not runtime scaffolding. It is not a cache of derived facts. It is the authored program. It must answer: what did the user author? What should survive save/load? What should undo restore? What objects exist as user-visible things? What choices are independent user choices versus derived consequences?
+
+If the source tree cannot answer those questions cleanly, it is not yet the right source tree.
+
+### 2.2 Event ASDL
+
+This is what can HAPPEN to the program. Instead of treating interaction as arbitrary callbacks, the pattern models input as a language too.
+
+Examples: pointer moved, key pressed, node inserted, selection changed, parameter edited, transport started, file opened.
+
+Events are part of the architecture because they determine how the source program evolves. Modeling them explicitly as typed ASDL makes the input language inspectable, testable, and serializable — just like the source language.
+
+### 2.3 Apply
+
+The pure reducer:
+
+```
+Apply : (state, event) → state
+```
+
+Apply does not reach into a global environment or mutate the world in place. It takes the current source ASDL plus an event and returns the next source ASDL.
+
+That purity is not cosmetic. It is what makes:
+- undo simple (restore the previous tree)
+- structural sharing possible (unchanged subtrees are the same objects)
+- memoization coherent (same inputs → same outputs)
+- tests trivial (construct state, apply event, assert result)
+
+If Apply is correct, state evolution becomes explicit and inspectable.
+
+### 2.4 Transitions
+
+A transition is a pure, memoized boundary from one phase to another:
+
+- source → authored
+- authored → resolved
+- resolved → classified
+- classified → scheduled
+
+A transition consumes unresolved knowledge. That phrase matters. A real phase boundary should answer a real question: resolve IDs into validated structural facts, classify a variant into a smaller set of cases, attach derived semantic information, flatten a rich domain form into a leaf-oriented shape.
+
+A transition is not just "another pass." It is a point where ambiguity is reduced.
+
+### 2.5 Terminals
+
+A terminal is a pure, memoized boundary that takes a phase-local node and produces an executable `Unit`.
+
+This is where the architecture stops being purely descriptive and becomes operational. The terminal says: this part of the program is now concrete enough — here is the specialized machine that performs it, here is the stable input it reads, here is the runtime state it owns.
+
+The terminal should be understood in two layers:
+
+1. It first defines the canonical machine: `gen` (the execution rule), `param` (stable machine input), `state` (mutable runtime-owned state)
+2. Backend realization then packages that machine as `Unit { fn, state_t }`
+
+Depending on backend, this may mean a quoted Terra function + Terra struct type, a specialized Lua closure + FFI-backed state representation, or some other target-specific executable product.
+
+### 2.6 Unit
+
+A `Unit` is the compile product. Conceptually: executable behavior paired with owned runtime state layout.
+
+```
+Unit { fn, state_t }
+```
+
+The exact representation varies by backend, but the role is stable: the Unit is the specialized machine the compiler produced for that subtree of the program. Units compose structurally — the same way the source tree composes structurally. Parent Units own child state. Composition is structural, not a separate architecture.
+
+### 2.7 The live loop
+
+Put together, those six concepts yield the live loop:
+
+```
+poll → apply → compile → execute
+```
+
+**poll** — Read an input from the outside world: a UI event, an audio/control change, a file-system update, a timer tick, a network message.
+
+**apply** — Use the pure reducer to turn the current source program into the next source program. If nothing meaningful changed, much of the structure stays identical. If something local changed, only that subtree gets a new identity.
+
+**compile** — Re-run the memoized transitions and terminals. Because boundaries are pure and nodes preserve structural identity where possible, only the changed parts need to be recomputed. This is incremental compilation as a direct consequence of architecture, not a bolt-on subsystem.
+
+**execute** — Run the currently realized Units. That may mean: call the audio callback, draw the frame, answer hit tests, advance a simulation step. The execution layer should not be re-deciding architecture-level questions. It should be running the machine that the compiler has already specialized.
+
+### 2.8 Hot swap is the natural execution story
+
+The live loop makes hot swap a natural operation rather than a special subsystem. The story is:
+
+- the previous source program compiled to some installed Units
+- a new event changes the source
+- affected subtrees recompile to new Units
+- the runtime installs or swaps those Units
+- execution continues using the new machine
+
+There is no need to invent a separate conceptual layer called "live object behavior" that must somehow be synchronized with compilation output. The Unit IS the live-eligible compiled artifact.
+
+### 2.9 The loop is continuous, not one-shot
+
+This is not a traditional ahead-of-time compiler where the program is compiled once and then run forever. The program is alive. The user keeps editing it. So the system repeats: receive new event, derive new source program, recompile affected parts, keep running the new machine.
+
+That is why the pattern is so suitable for interactive software. It treats interaction as editing a live program.
+
+### 2.10 Multiple compilation targets from one source
+
+The same source program may feed multiple derived products:
+
+- execution Units (audio, simulation)
+- view projections (pixels on screen)
+- inspection structures (debug views, scaffolding)
+- error reports
+- hit-test structures
+
+These are all memoized pure products derived from the same source tree, possibly through different phase paths. The architecture already assumes this — it is not an extension.
+
+### 2.11 Why this is better than "just use immutable data"
+
+Many systems use immutable data and still remain interpreter-shaped. They still walk generic trees every frame, branch dynamically on variants in hot paths, separate code generation from state ownership awkwardly, bolt on caches after the fact, and treat runtime traversal as the real architecture.
+
+The compiler pattern is stronger. Its real claim is:
+
+> the program should be explicitly modeled as source, and its execution should be the result of repeated specialization rather than repeated interpretation.
+
+That is a much bigger design statement than "use immutable data."
+
+---
+
+## Part 3: The Two Levels — Compilation and Execution
+
+The pattern stays coherent because it maintains a strong distinction between two kinds of code:
+
+1. Code that **decides what the machine should be** (compilation level)
+2. Code that **is the machine that runs** (execution level)
+
+A lot of architecture becomes muddy because these two levels are mixed together. The application ends up half describing the program and half executing it at the same time, with no clear boundary between the two.
+
+### 3.1 The compilation level
+
+The compilation level is where the system reasons about the user's program. It includes:
+
+- Source ASDL
+- Event ASDL
+- Apply
+- transitions
+- projections
+- terminals
+- structural error collection
+- inspection derived from the modeled program
+
+Its characteristic properties are: pure, structural, memoized at stage boundaries, testable by constructor + assertion, driven by modeled data rather than ambient context.
+
+This is the level where questions get answered: which variant is this really? Which IDs resolve to what? Which defaults apply? What layout should be produced? What specialized leaf machine should be emitted for this subtree?
+
+### 3.2 The execution level
+
+The execution level is where the machine actually runs. It includes:
+
+- a Terra function executing on native state
+- a LuaJIT closure running over FFI-backed state
+- a callback invoked by SDL or an audio driver
+- a hit-test routine answering geometry queries
+- a draw routine traversing already-lowered batches
+
+Its characteristic properties are different: it may be imperative internally, it mutates only its owned runtime state, it should not be rediscovering high-level domain semantics, and it should be specialized enough that dynamic architectural reasoning has already been consumed.
+
+The execution level is not where the app decides what exists. It is where the compiled artifact does the work it has already been specialized to do.
+
+### 3.3 Why this split matters
+
+If the execution level starts doing too much reasoning, you get symptoms: repeated dynamic branching on wide sum types, repeated lookups to resolve semantic facts that should have been attached earlier, runtime dependency on global context objects, mutable caches answering basic structural questions, difficulty testing without standing up large parts of the runtime.
+
+Those are all signs that compilation work leaked downward into execution.
+
+Likewise, if the compilation level starts taking on too much runtime machinery: pure boundaries become full of mutable orchestration state, terminals become hard to test without a live driver, backend concerns contaminate ASDL → Unit logic, phases stop reading like structural transformations and start reading like little runtimes.
+
+### 3.4 The slogan
+
+> **The compilation level decides. The execution level runs.**
+
+### 3.5 Compilation-level code
+
+The compilation level should be written in a recognizably structural style: `U.match`, `U.with`, `errs:each`, `errs:call`, ASDL constructors, small pure constructors, explicit error attachment. The goal is not to satisfy a functional-programming aesthetic. The goal is to ensure that phase boundaries behave like compiler passes: input structure in, output structure out, no hidden ambient dependence, no secret stateful side channels.
+
+### 3.6 Execution-level code
+
+Imperative code is not banned from the system. It is just supposed to live in the right place.
+
+Acceptable imperative behavior at the execution level: update filter delay elements in runtime state, increment frame counters, push pixels to a backend API, call SDL/GL/native APIs from installed code, mutate an allocated state struct during a callback.
+
+What is not acceptable is smuggling architecture-level reasoning into that imperative code. The execution layer should not be where we repeatedly decide which domain variant something is, whether a reference is valid, which layout policy applies, or how a wide authored form should be interpreted this frame. Those questions belong upstream.
+
+### 3.7 Illustration: healthy vs unhealthy split
+
+**Healthy text rendering:**
+- Compilation: resolve font, attach style defaults, shape text, compute line breaks, derive glyph runs, produce draw-ready items, terminal emits a specialized Unit
+- Execution: iterate already-shaped runs, read glyph positions, issue drawing operations
+
+**Unhealthy text rendering:**
+- Execution: choose a font, discover wrap mode, resolve alignment, shape text on the fly, compute line layout every frame for the same unchanged subtree
+
+**Healthy audio filter:**
+- Compilation: read authored filter type and parameters, resolve channel topology, compute coefficients, emit a leaf fixed to the concrete filter kind, define `state_t` that owns only live integrator history
+- Execution: read sample input, update state history, run the fixed arithmetic path
+
+**Unhealthy audio filter:**
+- Execution: what kind of filter is this? How many channels? Where are my coefficients? Which code path for this variant?
+
+### 3.8 Terminals are on the compilation side
+
+Even though terminals produce executable artifacts, terminals themselves are still part of the compilation level. A terminal is a pure function from phase-local data to a Unit. The terminal should remain structural and testable. Backend API details should be encapsulated in the produced Unit, not leaked into the terminal's semantic input model.
+
+### 3.9 Error handling differs by level
+
+At the compilation level, errors are structural: missing reference, unknown asset, invalid authored combination. They can be attached to the relevant subtree, collected, and sometimes replaced with neutral fallback behavior so unaffected siblings still compile.
+
+At the execution level, errors are operational: runtime backend failure, device failure, driver unavailability, hard execution faults.
+
+Mixing these two kinds of error handling leads to poor design.
+
+### 3.10 Testing differs by level
+
+Compilation-level tests should look like: construct ASDL input, call reducer/transition/terminal, assert output. No mocks, no containers, no elaborate runtime setup.
+
+Execution-level tests may involve: smoke tests, benchmark harnesses, backend integration checks, profiling and latency measurements.
+
+Both matter, but they test different things.
+
+### 3.11 Backend neutrality depends on this split
+
+The compilation level is where most of the application's meaning lives: modeled source, event handling, transitions, projections, terminal design. If that layer stays pure and structural, then different backends can realize the resulting Units differently without forcing a redesign. If instead the compilation layer is full of backend-specific runtime assumptions, the architecture stops being portable.
+
+---
+
+## Part 4: Unit — The Compile Product
+
+### 4.1 What a Unit is
+
+A `Unit` is the compiled machine for a subtree of the source program. It pairs specialized behavior with the runtime state layout that behavior owns.
+
+```
+Unit { fn, state_t }
+```
+
+- `fn` describes behavior — the executable code
+- `state_t` describes owned runtime state — the layout the code operates on
+
+The compilation level chooses this pairing. The execution level operates on it.
+
+### 4.2 Why Unit is better than "just a function"
+
+A plain function does not necessarily tell you what runtime state it owns, how that state should be allocated, how child state composes into parent state, what the lifecycle of that state is, or how hot swap should treat state compatibility.
+
+The Unit concept is richer because it keeps the state ABI and the executable behavior coupled. That is especially important in a system built around repeated recompilation. If the compiled artifact changes, the state ownership model may change too, and the architecture should represent that explicitly.
+
+### 4.3 Why Unit is better than codegen plus external runtime objects
+
+Another common alternative is to generate code but keep runtime state in a separate object system. That usually leads to either: the codegen is not really in charge of the running machine, or the runtime object layer becomes a shadow architecture competing with the source ASDL.
+
+The Unit avoids that split. The compiled machine owns its runtime state contract. Composition owns child state structurally. The runtime object graph does not need to be the real architecture.
+
+### 4.4 What belongs inside state_t
+
+Good examples:
+- integrator history for filters
+- mutable counters owned by the machine
+- parent-owned child state aggregation
+- cached runtime handles that are truly execution ownership
+- temporary execution-time fields that persist only as long as the machine does
+
+Poor examples:
+- authored parameter choices (belong in source)
+- unresolved references (belong in source, resolved in a phase)
+- derived semantic facts that should have been attached structurally before terminalization
+
+### 4.5 Unit composition
+
+Because Units compose structurally, they give the architecture a natural locality story:
+
+- child A has `state_t_A`
+- child B has `state_t_B`
+- parent `compose` builds a parent `state_t` containing those as fields plus any parent-local state
+
+The result is a single structural layout reflecting the same containment story as the source tree. The source tree composes structurally. The compiled Units compose structurally. The runtime state layout also composes structurally. All three relationships line up.
+
+This is cleaner than scattered heap objects, external registries, dynamic table lookup by child index, or generic runtime containers holding opaque state blobs.
+
+If a source subtree is unchanged, its terminal hits the memoize cache, its Unit can be reused, and the parent composition may also be reused depending on identity structure. Runtime installation can often remain stable.
+
+### 4.6 The canonical machine: gen, param, state
+
+The `Unit { fn, state_t }` is the packaged runtime artifact, but it is not the first machine concept. The canonical machine layer immediately above that packaging is:
+
+- **gen** — the execution rule / code-shaping part
+- **param** — the stable machine input it reads
+- **state** — the mutable runtime-owned state it preserves
+
+This is not an optional explanatory trick. It is the right way to think about terminal design. Many terminal design mistakes come from compressing those three questions too early. A leaf may look awkward not because Unit is the wrong contract, but because the phase above it is not making gen, param, and state obvious enough.
+
+### 4.7 Machine IR
+
+A good Machine IR above the canonical machine is the **typed machine-feeding layer** that makes the machine's compiled wiring explicit. It should answer five things directly:
+
+1. **Order** — what loops exist? What spans or ranges are executed? What headers determine one execution slice?
+
+2. **Addressability** — how does execution reach what it needs? What refs, slots, indices, or handles are already resolved?
+
+3. **Use-sites** — what concrete occurrences are executed? What instances of drawing, querying, routing, or processing exist?
+
+4. **Resource identity** — what realizable resources may need runtime ownership? What stable resource specifications identify them?
+
+5. **Runtime ownership requirements** — what mutable runtime state must persist? What state schema does the machine require?
+
+That is a more useful way to think about Machine IR than calling it merely a planning layer. Its job is to make gen, param, and state trivial to derive.
+
+This does NOT mean introducing a generic interpreted wiring DSL. The pattern should not devolve into runtime nodes like `Accessor(kind, ...)` or `Processor(kind, ...)` that execution must interpret dynamically. That would recreate the accidental interpreter at a different layer.
+
+Instead, the wiring should already have been compiled into ordinary typed shapes the machine can consume directly: spans and ranges, headers and closed dispatch records, slot/index refs, instance records, resource specifications, runtime state schemas.
+
+The practical test is:
+
+> does the machine receive explicit order, addressability, use-sites, resource identity, and persistent state needs — or does it still have to invent them while running?
+
+If it still has to invent them, the ASDL and phase structure above the terminal are still too high-level.
+
+### 4.8 The header pattern
+
+When several later branches must remain aligned after a shared flattening phase, it is often a mistake to keep widening one giant node record so every later branch can still find the same thing.
+
+A better design is often:
+
+1. Define a **shared structural header vocabulary**
+2. Let later branches carry only their own orthogonal fact planes
+3. Rejoin those branches structurally through the shared header/index space rather than through semantic lookup
+
+A header is not just metadata. It is a typed structural carrier for truths such as: stable identity, parent/child topology, subtree spans, region-local index space — whatever minimal structural alignment later branches must share.
+
+The key discipline is:
+
+> keep shared structure in the header spine; keep branch-specific meaning in separate fact planes.
+
+Without a header spine, there is constant pressure to build oversized lower nodes that carry geometry facts, render facts, query facts, accessibility facts, and routing facts all together, merely so later phases can still line them up. That creates broad rebuilds, hidden coupling between branches, and expensive late splitting.
+
+The practical test is:
+
+> if several later branches need the same structural identity/topology but different semantic facts, should there be one shared header spine instead of one wider node type?
+
+Very often, yes.
+
+### 4.9 The facet pattern
+
+If the header spine carries the shared structural truth, then the next question is: what different aspects of meaning are attached to that shared structure, and which later consumers actually need which aspects?
+
+A **facet** is one orthogonal semantic plane aligned to the shared header/index space. Typical examples: layout facts, paint facts, content facts, behavior facts, accessibility facts.
+
+Instead of widening one lower node record until it carries everything, a better design is:
+
+1. One shared header spine
+2. Several aligned facet planes
+3. Branch-specific lowerings that consume only the facets they actually need
+
+In that shape: the header answers "what thing is this in the shared structure?" and the facet answers "what aspect of that thing are we talking about?"
+
+This matters because many bad lower designs come from bundling concerns that do not need to travel together. Geometry solve does not usually need paint facts. Render lowering does not usually need key-route facts. Accessibility often does not need to travel with render semantics at all.
+
+The facet pattern is both a modeling improvement and a performance improvement. With the right facet split: each lowering phase does less semantic work, unrelated edits stay more local, memoization boundaries stay cleaner, and joins remain structural through the shared header/index space.
+
+Together, headers and facets give a powerful way to design lower ASDL that stays local, branchable, and machine-friendly:
+
+- **headers** carry shared structural truth
+- **facets** carry orthogonal semantic truth
+
+### 4.10 Errors and fallback at the Unit boundary
+
+Suppose a subtree cannot be compiled cleanly because an asset is missing, a reference is invalid, or a backend does not support some requested form yet. A good architecture can:
+
+- attach an error to that subtree
+- produce a neutral fallback Unit if appropriate
+- continue compiling unaffected siblings
+
+A missing image may compile to a placeholder visual Unit. An unsupported effect may compile to a no-op Unit plus an attached error. An invalid reference may compile to silence in an audio subtree. This is much cleaner than turning one subtree problem into a global runtime failure.
+
+---
+
+## Part 5: Designing the ASDL
+
+### 5.1 Step 1: List the nouns
 
 Open the program you're modeling (or imagine it if it doesn't exist). Look at every element the user can see and interact with. Write down every noun.
 
@@ -93,7 +503,7 @@ chart, axis, series, data point, filter, sort, pivot table,
 named range, validation rule, comment, hyperlink
 ```
 
-### 2.2 Step 2: Find the identity nouns
+### 5.2 Step 2: Find the identity nouns
 
 Not all nouns are equal. Some are THINGS with identity — they persist, they can be referenced, they can be edited independently. Others are PROPERTIES of things — they change when the thing changes, they don't have independent identity.
 
@@ -114,7 +524,7 @@ DAW:
 
 Identity nouns become ASDL records or enum variants. Property nouns become fields ON those records.
 
-### 2.3 Step 3: Find the sum types
+### 5.3 Step 3: Find the sum types
 
 Sum types represent CHOICES — places where the domain has more than one possibility. They are the most important types in the source phase because they represent UNRESOLVED DECISIONS.
 
@@ -141,9 +551,9 @@ Spreadsheet:
     A chart type is bar OR line OR scatter OR pie.
 ```
 
-Each "or" becomes an ASDL enum. Each option becomes a variant. This is where domain expertise matters most — missing a variant means the system can't represent something the user needs. Adding a variant later means every `Unit.match` in the pipeline needs a new arm.
+Each "or" becomes an ASDL enum. Each option becomes a variant. This is where domain expertise matters most — missing a variant means the system can't represent something the user needs. Adding a variant later means every `U.match` in the pipeline needs a new arm.
 
-### 2.4 Step 4: Find the containment hierarchy
+### 5.4 Step 4: Find the containment hierarchy
 
 Domain objects contain other domain objects. The containment forms a tree (or DAG). This tree IS the ASDL structure.
 
@@ -201,7 +611,7 @@ Track = (number id, string name, DeviceChain devices, Clip* clips, ...) unique
 DeviceChain = (Device* devices) unique
 ```
 
-### 2.5 Step 5: Find the coupling points
+### 5.5 Step 5: Find the coupling points
 
 Coupling points are places where two independent subtrees of the containment hierarchy need information from each other. These are the HARDEST design decisions because they determine phase boundaries.
 
@@ -253,7 +663,7 @@ Spreadsheet coupling points:
 
 Each coupling point tells you something about phase ordering. If A depends on B and B depends on A, they must be resolved in the same phase. If A depends on B but B doesn't depend on A, B must be resolved first (earlier phase).
 
-### 2.6 Step 6: Define the phases
+### 5.6 Step 6: Define the phases
 
 Phases are ordered by knowledge. Each phase knows everything the previous phase knew, plus the decisions it resolved. The source phase has the most sum types (most unresolved decisions). The terminal phase has zero sum types (everything resolved to concrete values).
 
@@ -301,445 +711,7 @@ DAW phases:
 
 Each phase transition has a VERB: lower, resolve, classify, schedule, compile. The verb describes what knowledge is consumed. If you can't name the verb, the phase transition isn't meaningful.
 
-
----
-
-## 3. Quality Tests for the Source Phase
-
-The source ASDL determines everything downstream. These tests help you know if it's right.
-
-### 3.1 The Save/Load test
-
-Serialize your source ASDL to JSON (or any format). Load it back. Reconstruct the ASDL. Is every user-visible aspect of the project restored perfectly?
-
-If something is lost — a UI layout preference, a device ordering, a selection state — it means the source ASDL is missing a field. The source phase must capture EVERYTHING the user cares about.
-
-```
-FAILS the save/load test:
-    The user arranged their mixer channel strips in a custom order.
-    The ASDL has no field for strip_order on Track.
-    After save/load, the mixer reverts to default order.
-    → Add: strip_order: number to Track
-
-    The user collapsed a device panel in the UI.
-    The ASDL has no field for collapsed state.
-    After save/load, all panels are expanded.
-    → Add: collapsed: boolean to Device? Or is this View state,
-      not source state? If the user expects it to persist, it's source.
-```
-
-Rule: if the user would be surprised or annoyed that something changed after save/load, it belongs in the source ASDL.
-
-### 3.2 The Undo test
-
-The user performs an edit. Then undoes it. The source ASDL should be identical to the pre-edit state — and because ASDL `unique` gives structural identity, "identical" means the SAME Lua object. Memoize returns the cached compilation instantly. The entire UI and audio state reverts with zero recompilation.
-
-If undo requires special handling — reconstructing state, invalidating caches, re-running computations — the source ASDL is wrong. Undo should be: replace the current ASDL tree with the previous one. That's it. Everything else follows from memoize.
-
-```
-FAILS the undo test:
-    The user adds an effect. The effect allocates a state buffer.
-    Undo removes the effect. But the state buffer must be freed.
-    → Wrong: state buffers shouldn't exist outside the compiled Unit.
-      The Unit owns its state. Remove the ASDL node, recompile,
-      the new Unit has no state for that effect. Old state is GC'd.
-
-    The user changes a parameter. Undo reverts it.
-    But the UI shows the old value while the audio plays the new one
-    for a moment.
-    → Wrong: UI and audio should both derive from the same ASDL.
-      Revert the ASDL → recompile both UI and audio → instant.
-```
-
-### 3.3 The Collaboration test
-
-Two users edit the same project simultaneously. They edit different things (different tracks, different parameters). Can their edits be merged?
-
-ASDL trees are VALUES, not mutable objects. Merging two value-trees is a structural operation: for each node, take the newer version. If both users edited the same node, conflict. This works naturally if:
-
-- Each identity noun has a stable ID
-- Edits produce new ASDL nodes (structural sharing for unchanged subtrees)
-- The merge algorithm walks both trees and picks the non-conflicting updates
-
-If merging requires understanding the semantics of the edit (not just the structure), the source ASDL is too coarse-grained. Each independently editable thing should be its own ASDL node.
-
-### 3.4 The Completeness test
-
-For each sum type in the source ASDL, ask: "Can the user create an instance of every variant?" If a variant is impossible to reach through the UI, it shouldn't exist. If a user action creates something that doesn't fit any variant, a variant is missing.
-
-```
-Device = NativeDevice | LayerDevice | SelectorDevice | SplitDevice | GridDevice
-
-Can the user create each one?
-    NativeDevice:   yes, by adding a built-in effect or instrument
-    LayerDevice:    yes, by creating a layer container
-    SelectorDevice: yes, by creating a selector/switch
-    SplitDevice:    yes, by creating a multiband split
-    GridDevice:     yes, by creating a modular patch
-
-Is there a user action that creates something else?
-    What about an external VST plugin?
-    → Need: PluginDevice { id, name, plugin_id, preset, params }
-    Or is it a NativeDevice with a special NodeKind?
-    → Design decision: is "VST plugin" a device container kind
-      or a node processing kind?
-```
-
-Every variant must be reachable. Every reachable state must have a variant.
-
-### 3.5 The Minimality test
-
-For each field on each record, ask: "Is there a user action that changes ONLY this field?" If yes, the field is at the right granularity. If no — if this field always changes together with another field — they might be one field (a record containing both), or one of them might be derived.
-
-```
-Track:
-    volume_db: number   — user drags fader → changes only this → CORRECT
-    pan: number         — user drags pan knob → changes only this → CORRECT
-    muted: boolean      — user clicks mute → changes only this → CORRECT
-
-    volume_db AND pan changing together? No, they're independent. CORRECT.
-
-Biquad:
-    freq: number        — user turns freq knob → changes only this → CORRECT
-    q: number           — user turns Q knob → changes only this → CORRECT
-
-    What about filter coefficients (b0, b1, b2, a1, a2)?
-    → These are DERIVED from freq and q. They change whenever
-      freq or q changes. They're not source — they're computed
-      in the compilation phase. Do NOT put them in the source ASDL.
-```
-
-Rule: if a value is derived from other values in the ASDL, it belongs in a later phase, not in the source. The source contains only INDEPENDENT user choices.
-
-### 3.6 The Orthogonality test
-
-For each pair of fields on a record, ask: "Can these vary independently?" If yes, they're orthogonal — good. If no — if changing one constrains or determines the other — you may have a hidden dependency that should be a sum type or a separate phase.
-
-```
-Track:
-    volume_db: number and pan: number
-    → Can volume be -6dB with pan at center? Yes.
-    → Can volume be 0dB with pan hard left? Yes.
-    → They vary independently. ORTHOGONAL. Good.
-
-Device:
-    kind: NodeKind and params: Param*
-    → Can a Biquad have gain params? No — biquad has freq/q.
-    → Can a Gain have freq/q params? No — gain has db.
-    → They're NOT orthogonal. kind constrains params.
-    → This is correct AS LONG AS NodeKind is a sum type where
-      each variant declares its own parameter set.
-```
-
-When fields are not orthogonal, the constraint should be visible in the types — usually as a sum type where each variant carries only the fields it needs.
-
-### 3.7 The LuaFun test
-
-For each function you write — every transition, every terminal, every reducer arm, every projection — ask: "Can I express this as a LuaFun chain?" If yes, the ASDL is well-modeled. If no, the ASDL is wrong.
-
-This is the most practical of all the quality tests. It catches problems at implementation time, not design time. You designed the ASDL, you passed the save/load test, the undo test, the completeness test. You start writing the transition function. And the code resists.
-
-```
-You need a mutable accumulator:
-    fun.iter(nodes):map(f):totable()  should work.
-    If it doesn't — if f needs state from previous iterations —
-    the nodes are not independent. They're coupled.
-    → Split the data so each node is self-contained,
-      or add a phase that resolves the coupling first.
-
-You need to look up another node by ID:
-    fun.iter(nodes):map(function(n)
-        local target = find_by_id(all_nodes, n.target_id)  -- breaking out!
-        ...
-    end)
-    → The lookup means you need context the current node doesn't carry.
-      This belongs in a Resolved phase that already linked the references.
-      After resolution, the data the node needs is ON the node.
-
-You need imperative control flow (break, early return, mutation):
-    for i, node in ipairs(nodes) do
-        if node.kind == "special" then
-            result[i] = handle_special(node)  -- can't do this in map
-        else ...
-    → The sum type should make "special" a variant.
-      Unit.match handles it. LuaFun maps over the rest.
-      The imperative control flow was compensating for a missing variant.
-```
-
-The rule is: **every function in the pure layer is a LuaFun chain.** Transitions, terminals, apply reducers, projections, helpers. All of them. If a function resists LuaFun, don't fight LuaFun — fix the ASDL. LuaFun is the quality probe that catches modeling errors at the moment you try to implement them.
-
-This is also why LuaFun is listed as a primitive, not a utility. It is the enforcement mechanism that makes the purity guarantees real. ASDL gives you immutable values. Memoize gives you identity-based caching. LuaFun gives you the guarantee that the functions operating on those values are actually pure. Without it, purity is a discipline. With it, purity is the path of least resistance.
-
-### 3.8 The Testing test
-
-For each function you write, ask: "Can I test this with nothing but an ASDL constructor and an assertion?" If yes, the design is right. If no — if you need mocks, fixtures, setup, teardown, a running server, a database, environment variables, or a specific ordering of prior calls — then the function has hidden dependencies, which means the ASDL is incomplete or the function is impure.
-
-This is not really a separate test. It is a consequence of all the other tests passing. If the ASDL is complete (3.4), minimal (3.5), orthogonal (3.6), and the functions are LuaFun chains (3.7), then testability falls out automatically. But it is worth calling out as its own checkpoint because it catches a specific failure mode: functions that look pure but reach into context.
-
-```
-The function needs a "context" or "environment" argument:
-    resolve_track(track, context)
-    → What is "context"? It carries data the track doesn't own.
-      That data belongs in a prior phase that put it ON the track.
-      After resolution, the track is self-contained.
-      The test constructs a track. No context needed.
-
-The function needs to be called in a specific order:
-    init_system()
-    load_plugins()
-    result = process(input)  -- only works after init + load
-    → The ordering dependency means hidden state.
-      In the pattern, process(input) works on any valid input,
-      regardless of what happened before. The ASDL node carries
-      everything the function needs.
-
-The function needs a mock:
-    process(input, mock_filesystem)
-    → The function is reaching outside its arguments.
-      The file system data should already be in the ASDL —
-      loaded during an earlier phase, stored as values,
-      not as live references to external systems.
-```
-
-The rule is: **every function is testable with one constructor call and one assertion.** If it needs more, trace the extra dependency back to the ASDL. Either the data is missing (incomplete ASDL), the phases are wrong (unresolved coupling), or the function is impure (escaping LuaFun). The fix is always upstream, never at the test site.
-
-This also means the entire testing infrastructure dissolves:
-- **No test framework** — setup/teardown have nothing to set up.
-- **No mocks** — pure functions have no external dependencies.
-- **No fixtures** — ASDL constructors are self-contained.
-- **No regression suite** — memoize is the regression oracle. Same input to changed function: if memoize recomputes, behavior changed.
-- **No property testing library** — ASDL types define the space of valid inputs. Random testing is: random ASDL constructor arguments → call function → assert structural properties.
-- **No flaky tests** — pure functions produce the same output for the same input. Always.
-
-### 3.9 The memoize-hit-ratio test
-
-Once the pipeline exists, there is another extremely practical design test available:
-
-> **What percentage of memoized boundaries hit the cache during realistic edits?**
-
-This is not a backend-speed metric. It is a design-quality metric.
-
-If one small edit causes:
-
-- one or two local misses
-- a few expected parent misses
-- many sibling hits
-
-then the ASDL decomposition is probably healthy.
-
-If one small edit causes:
-
-- misses across most leaves
-- misses across unrelated siblings
-- misses at boundaries that should have been unaffected
-
-then the design is telling you something is wrong.
-
-Typical causes include:
-
-- structural sharing is broken (deep copy instead of `U.with`)
-- IDs are unstable
-- memoize keys include volatile data
-- a boundary is too coarse
-- a source node is carrying too much unrelated state
-- a phase is flattening away locality too early
-
-This is important because it turns architectural quality into an observable quantity.
-
-A high hit ratio means:
-
-- edits are local
-- identities are stable
-- phases are well scoped
-- the ASDL matches the natural incrementality of the domain
-
-A low hit ratio means the opposite.
-
-The especially useful metric is not only the global hit ratio, but **misses per edit**:
-
-- change one biquad frequency → how many boundaries miss?
-- mute one track → how many boundaries miss?
-- insert one paragraph → how many boundaries miss?
-
-That number is the architectural cost of one user action.
-
-In practice, it helps to give important boundaries explicit names so the inspector report is readable:
-
-- `U.transition("lower_track", fn)`
-- `U.terminal("compile_node", fn)`
-- `U.memo_measure_edit(...)`
-- `U.memo_report()`
-
-So once you have memoize instrumentation, treat the report as a design inspector:
-
-- **90%+ reuse** usually means the decomposition is excellent
-- **70–90% reuse** is often healthy but worth inspecting
-- **below 50% reuse** usually means the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
-
-There is one expected caveat: the root boundary often misses on every edit. That is normal. The real question is whether the leaves and intermediate structural boundaries are reusing their work.
-
-In other words:
-
-> **The cache hit ratio is the design-quality metric for incremental compilation.**
-
-Use it the same way you use the save/load test, the undo test, and the LuaFun test: not as a performance tweak, but as a diagnostic for whether the model and phase boundaries are right.
-
----
-
-## 4. Type Design Principles
-
-### 4.1 Sum types are domain decisions
-
-Every sum type in the source ASDL represents a decision the user made. "This is an audio clip, not a MIDI clip." "This is a low-pass filter, not a high-pass." "This parameter is automated, not static."
-
-Later phases RESOLVE these decisions. A sum type that exists in phase N and doesn't exist in phase N+1 was consumed by the transition between them. That transition's job was to resolve that specific decision.
-
-```
-Editor phase:
-    Device = NativeDevice | LayerDevice | SelectorDevice | ...
-    (user's decision: what kind of container)
-
-Authored phase:
-    Node = (id, kind: NodeKind, params, ...)
-    (container decision consumed → everything is a Node in a Graph)
-    But NodeKind still has 135 variants — those decisions are consumed LATER
-
-Scheduled phase:
-    Job = (node_id, kind_code: number, params: number*)
-    (NodeKind decision consumed → just a numeric code + parameter array)
-    Zero sum types. Everything is a flat job with numbers.
-```
-
-### 4.2 Fewer sum types downstream
-
-Each phase should have fewer sum types than the previous phase. This is the NARROWING property. If a phase adds sum types, something is wrong — you're creating decisions instead of consuming them.
-
-The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just concrete fields and predictable access paths. This is what lets the backend optimize aggressively — whether that is LLVM on Terra or host-JIT specialization on LuaJIT — because there is nothing semantic left to dispatch on.
-
-```
-Phase          Sum types          What they represent
-──────────     ──────────         ───────────────────
-Editor         12 enums           User choices
-Authored       8 enums            Container choices resolved
-Resolved       5 enums            References resolved
-Classified     2 enums            Rates classified
-Scheduled      0 enums            Everything is a flat job
-Terminal       0 sum types        Everything is native code
-```
-
-If a phase has more sum types than the previous one, ask: "What new decision was introduced?" Sometimes it's legitimate — a classification phase might introduce a RateClass enum that didn't exist before. But the total decision surface should still be shrinking.
-
-### 4.3 Records should be deep modules
-
-Each record should be a "deep module" in the Ousterhout sense — a simple interface hiding significant complexity. The record's fields are the interface. The methods that operate on it are the implementation.
-
-```
-SHALLOW (bad — too many fields, too little meaning):
-    BiquadNode = (
-        number b0, number b1, number b2,
-        number a1, number a2,
-        number x1, number x2, number y1, number y2,
-        number frequency, number q, number gain,
-        number sample_rate, number filter_mode
-    )
-
-DEEP (good — meaningful fields, complexity hidden):
-    BiquadNode = (
-        number id,
-        FilterMode mode,       -- what the user chose
-        number frequency,      -- what the user set
-        number q               -- what the user set
-    ) unique
-    -- Coefficients computed during compilation.
-    -- History state owned by the Unit.
-    -- Sample rate is an explicit boundary argument.
-```
-
-The deep version has 4 fields. The shallow version has 14. The deep version is the source phase — what the user decided. The shallow version mixed source decisions (frequency, q) with derived values (coefficients) and runtime state (x1, y1). These belong in different phases.
-
-### 4.4 IDs should be structural, not sequential
-
-Every identity noun needs an ID. The ID should support structural comparison (for ASDL `unique` identity). Two approaches:
-
-**Sequential IDs** (simple but fragile):
-```
-Track(1, "Lead", ...) unique
-Track(2, "Bass", ...) unique
--- What if the user reorders tracks?
--- Track 1 and Track 2 swap positions.
--- The IDs stay the same → the memoize cache is correct.
--- But if IDs were assigned by position, reordering would
--- invalidate the entire cache.
-```
-
-**Content-derived IDs** (robust):
-```
--- The ID is part of the unique key, but not the position.
--- Moving a track changes its position in the list,
--- but the Track node itself (same ID, same name, same devices)
--- is the same unique object. Memoize hits.
-```
-
-Rule: IDs should identify the THING, not its POSITION. Moving things should not change their identity. This maximizes memoize cache hits.
-
-### 4.5 Lists vs. maps
-
-ASDL has `*` for lists. It doesn't have maps/dictionaries. If you need key-value lookup, you have two options:
-
-**List with ID lookup** (standard):
-```
-Track = (number id, string name, ...) unique
-Project = (Track* tracks, ...) unique
--- Look up by: fun.iter(project.tracks):find(function(t) return t.id == id end)
-```
-
-**Sorted list** (for ordered data):
-```
-Breakpoint = (number time, number value) unique
-AutomationCurve = (Breakpoint* points, ...) unique
--- Points are sorted by time. Binary search for lookup.
--- Sorted order is an invariant, enforced at construction.
-```
-
-Don't use Lua tables as maps in the source ASDL. ASDL nodes are typed records with known fields. A Lua table is an untyped bag. It breaks memoize (table identity is by reference, not by content). It breaks save/load (no schema for the keys). It breaks the type system (no field validation).
-
-If you need associative data, model it as a list of key-value records:
-
-```
-Setting = (string key, string value) unique
-Settings = (Setting* entries) unique
--- Not: settings: table (which breaks everything)
-```
-
-### 4.6 References across the tree
-
-Sometimes one ASDL node needs to reference another that isn't its child. A Send references a target Track. An automation lane references a Parameter. A wire connects two Ports.
-
-Model these as ID references, not Lua references:
-
-```
-WRONG (Lua reference — breaks unique, breaks save/load):
-    Send = (Track target, number gain_db)
-    -- target is a Lua pointer to another node.
-    -- ASDL unique can't hash Lua objects correctly.
-    -- Save/load can't serialize Lua pointers.
-
-RIGHT (ID reference — works with unique, save/load, memoize):
-    Send = (number target_track_id, number gain_db) unique
-    -- target_track_id is a number that references a Track.
-    -- ASDL unique hashes it correctly.
-    -- Save/load serializes it as a number.
-    -- A later phase (Resolved) validates that the ID exists.
-```
-
-Cross-references are resolved in a dedicated phase. The source ASDL contains the INTENT ("send to track 5"). The Resolved phase validates it ("track 5 exists and has the right channel count").
-
-
----
-
-## 5. Phase Design
-
-### 5.1 The universal phase pattern
+#### The universal phase pattern
 
 Across every domain we've examined — DAW, text editor, spreadsheet, game engine, UI toolkit — the same sequence of phases appears, with domain-specific names:
 
@@ -754,9 +726,7 @@ Phase 6: COMPILED        (native code, Unit)
 
 Not every domain needs all six. Some merge phases. Some skip phases. But the ORDER is universal. You cannot schedule before resolving. You cannot classify before knowing the semantic model. You cannot compile before scheduling.
 
-### 5.2 Phase 1: Vocabulary
-
-This is the user's language. The types mirror the UI. Every button, every panel, every editable field corresponds to a field in this phase.
+**Phase 1: Vocabulary.** This is the user's language. The types mirror the UI. Every button, every panel, every editable field corresponds to a field in this phase.
 
 Design rules:
 - Name types the way the user would name them (Track, not AudioChannel)
@@ -781,9 +751,7 @@ Editor.Sheet = (Cell* cells, number rows, number cols, ...) unique
 Editor.Scene = (Entity* entities, Camera camera, Lighting lighting) unique
 ```
 
-### 5.3 Phase 2: Semantic model
-
-The vocabulary contains user-facing abstractions that hide complexity. Phase 2 UNFOLDS these abstractions into their semantic meaning.
+**Phase 2: Semantic model.** The vocabulary contains user-facing abstractions that hide complexity. Phase 2 UNFOLDS these abstractions into their semantic meaning.
 
 In a DAW: Device containers (Layer, Selector, Split) become Graphs with Nodes and Wires. The user thinks "layer device." The compiler thinks "parallel graph with mix node."
 
@@ -823,9 +791,7 @@ Authored.CellExpr = Literal(CellValue value)
                    | BinOp(string op, CellExpr lhs, CellExpr rhs)
 ```
 
-### 5.4 Phase 3: Resolved
-
-Cross-references are validated. IDs are stable. Everything that references something else is confirmed to reference a real thing.
+**Phase 3: Resolved.** Cross-references are validated. IDs are stable. Everything that references something else is confirmed to reference a real thing.
 
 This phase exists because validation requires seeing the WHOLE document. Phase 2's transitions are local — they transform one node at a time. Phase 3 is global — it looks at all nodes to validate references.
 
@@ -849,9 +815,7 @@ Resolved.Sheet = (Resolved.Cell* cells,
 -- Topological sort computed for evaluation order.
 ```
 
-### 5.5 Phase 4: Classified
-
-Domain-specific classification. In a DAW: rate classes (sample, block, init, constant). In a layout engine: sizing categories (fixed, flex, intrinsic). In a spreadsheet: cell volatility (static, depends-on-volatile).
+**Phase 4: Classified.** Domain-specific classification. In a DAW: rate classes (sample, block, init, constant). In a layout engine: sizing categories (fixed, flex, intrinsic). In a spreadsheet: cell volatility (static, depends-on-volatile).
 
 This phase exists to assign CATEGORIES that determine how things will be compiled. A constant parameter and a sample-rate parameter produce different code. A fixed-width element and a flex element use different layout algorithms.
 
@@ -875,9 +839,7 @@ Classified.Element = (number id, SizeClass width_class,
 -- the text/layout coupling resolves.
 ```
 
-### 5.6 Phase 5: Scheduled
-
-The execution plan. Resources allocated. Order determined. This is the last phase before compilation. Everything is concrete — numbers, indices, offsets.
+**Phase 5: Scheduled.** The execution plan. Resources allocated. Order determined. This is the last phase before compilation. Everything is concrete — numbers, indices, offsets.
 
 Design rules:
 - ZERO sum types. Everything is a number or a flat record of numbers.
@@ -901,11 +863,9 @@ Scheduled.EvalStep = (number cell_id, number op_code,
                       number* args) unique
 ```
 
-### 5.7 Phase 6: Compiled
+**Phase 6: Compiled.** Terminal boundaries produce Units. This is not a "phase" in the ASDL sense — there are no ASDL types. The output is `{ fn, state_t }`. The Unit IS the final phase.
 
-Terminal boundaries produce Units. This is not a "phase" in the ASDL sense — there are no ASDL types. The output is `{ fn, state_t }`. The Unit IS the final phase.
-
-### 5.8 When to merge phases
+#### When to merge phases
 
 Not every domain needs six phases. Merge phases when:
 - Two phases would always run together (no independent use of intermediate result)
@@ -930,13 +890,179 @@ Complex app (e.g. DAW):
 
 Rule of thumb: if you can't name the VERB for a phase transition, the phase probably shouldn't exist.
 
----
+### 5.7 Test the source ASDL
 
-## 6. Designing for Incremental Compilation
+Once the source phase is drafted, test it before writing a single boundary function. These tests catch modeling errors that would compound through every downstream phase.
+
+#### The save/load test
+
+Serialize your source ASDL to JSON (or any format). Load it back. Reconstruct the ASDL. Is every user-visible aspect of the project restored perfectly?
+
+If something is lost — a UI layout preference, a device ordering, a selection state — it means the source ASDL is missing a field. The source phase must capture EVERYTHING the user cares about.
+
+```
+FAILS the save/load test:
+    The user arranged their mixer channel strips in a custom order.
+    The ASDL has no field for strip_order on Track.
+    After save/load, the mixer reverts to default order.
+    → Add: strip_order: number to Track
+
+    The user collapsed a device panel in the UI.
+    The ASDL has no field for collapsed state.
+    After save/load, all panels are expanded.
+    → Add: collapsed: boolean to Device? Or is this View state,
+      not source state? If the user expects it to persist, it's source.
+```
+
+Rule: if the user would be surprised or annoyed that something changed after save/load, it belongs in the source ASDL.
+
+#### The undo test
+
+The user performs an edit. Then undoes it. The source ASDL should be identical to the pre-edit state — and because ASDL `unique` gives structural identity, "identical" means the SAME Lua object. Memoize returns the cached compilation instantly. The entire UI and audio state reverts with zero recompilation.
+
+If undo requires special handling — reconstructing state, invalidating caches, re-running computations — the source ASDL is wrong. Undo should be: replace the current ASDL tree with the previous one. That's it. Everything else follows from memoize.
+
+```
+FAILS the undo test:
+    The user adds an effect. The effect allocates a state buffer.
+    Undo removes the effect. But the state buffer must be freed.
+    → Wrong: state buffers shouldn't exist outside the compiled Unit.
+      The Unit owns its state. Remove the ASDL node, recompile,
+      the new Unit has no state for that effect. Old state is GC'd.
+
+    The user changes a parameter. Undo reverts it.
+    But the UI shows the old value while the audio plays the new one
+    for a moment.
+    → Wrong: UI and audio should both derive from the same ASDL.
+      Revert the ASDL → recompile both UI and audio → instant.
+```
+
+#### The collaboration test
+
+Two users edit the same project simultaneously. They edit different things (different tracks, different parameters). Can their edits be merged?
+
+ASDL trees are VALUES, not mutable objects. Merging two value-trees is a structural operation: for each node, take the newer version. If both users edited the same node, conflict. This works naturally if:
+
+- Each identity noun has a stable ID
+- Edits produce new ASDL nodes (structural sharing for unchanged subtrees)
+- The merge algorithm walks both trees and picks the non-conflicting updates
+
+If merging requires understanding the semantics of the edit (not just the structure), the source ASDL is too coarse-grained. Each independently editable thing should be its own ASDL node.
+
+#### The completeness test
+
+For each sum type in the source ASDL, ask: "Can the user create an instance of every variant?" If a variant is impossible to reach through the UI, it shouldn't exist. If a user action creates something that doesn't fit any variant, a variant is missing.
+
+```
+Device = NativeDevice | LayerDevice | SelectorDevice | SplitDevice | GridDevice
+
+Can the user create each one?
+    NativeDevice:   yes, by adding a built-in effect or instrument
+    LayerDevice:    yes, by creating a layer container
+    SelectorDevice: yes, by creating a selector/switch
+    SplitDevice:    yes, by creating a multiband split
+    GridDevice:     yes, by creating a modular patch
+
+Is there a user action that creates something else?
+    What about an external VST plugin?
+    → Need: PluginDevice { id, name, plugin_id, preset, params }
+    Or is it a NativeDevice with a special NodeKind?
+    → Design decision: is "VST plugin" a device container kind
+      or a node processing kind?
+```
+
+Every variant must be reachable. Every reachable state must have a variant.
+
+#### The minimality test
+
+For each field on each record, ask: "Is there a user action that changes ONLY this field?" If yes, the field is at the right granularity. If no — if this field always changes together with another field — they might be one field (a record containing both), or one of them might be derived.
+
+```
+Track:
+    volume_db: number   — user drags fader → changes only this → CORRECT
+    pan: number         — user drags pan knob → changes only this → CORRECT
+    muted: boolean      — user clicks mute → changes only this → CORRECT
+
+    volume_db AND pan changing together? No, they're independent. CORRECT.
+
+Biquad:
+    freq: number        — user turns freq knob → changes only this → CORRECT
+    q: number           — user turns Q knob → changes only this → CORRECT
+
+    What about filter coefficients (b0, b1, b2, a1, a2)?
+    → These are DERIVED from freq and q. They change whenever
+      freq or q changes. They're not source — they're computed
+      in the compilation phase. Do NOT put them in the source ASDL.
+```
+
+Rule: if a value is derived from other values in the ASDL, it belongs in a later phase, not in the source. The source contains only INDEPENDENT user choices.
+
+#### The orthogonality test
+
+For each pair of fields on a record, ask: "Can these vary independently?" If yes, they're orthogonal — good. If no — if changing one constrains or determines the other — you may have a hidden dependency that should be a sum type or a separate phase.
+
+```
+Track:
+    volume_db: number and pan: number
+    → Can volume be -6dB with pan at center? Yes.
+    → Can volume be 0dB with pan hard left? Yes.
+    → They vary independently. ORTHOGONAL. Good.
+
+Device:
+    kind: NodeKind and params: Param*
+    → Can a Biquad have gain params? No — biquad has freq/q.
+    → Can a Gain have freq/q params? No — gain has db.
+    → They're NOT orthogonal. kind constrains params.
+    → This is correct AS LONG AS NodeKind is a sum type where
+      each variant declares its own parameter set.
+```
+
+When fields are not orthogonal, the constraint should be visible in the types — usually as a sum type where each variant carries only the fields it needs.
+
+#### The testing test
+
+For each function you write, ask: "Can I test this with nothing but an ASDL constructor and an assertion?" If yes, the design is right. If no — if you need mocks, fixtures, setup, teardown, a running server, a database, environment variables, or a specific ordering of prior calls — then the function has hidden dependencies, which means the ASDL is incomplete or the function is impure.
+
+```
+The function needs a "context" or "environment" argument:
+    resolve_track(track, context)
+    → What is "context"? It carries data the track doesn't own.
+      That data belongs in a prior phase that put it ON the track.
+      After resolution, the track is self-contained.
+      The test constructs a track. No context needed.
+
+The function needs to be called in a specific order:
+    init_system()
+    load_plugins()
+    result = process(input)  -- only works after init + load
+    → The ordering dependency means hidden state.
+      In the pattern, process(input) works on any valid input,
+      regardless of what happened before. The ASDL node carries
+      everything the function needs.
+
+The function needs a mock:
+    process(input, mock_filesystem)
+    → The function is reaching outside its arguments.
+      The file system data should already be in the ASDL —
+      loaded during an earlier phase, stored as values,
+      not as live references to external systems.
+```
+
+The rule is: **every function is testable with one constructor call and one assertion.** If it needs more, trace the extra dependency back to the ASDL. Either the data is missing (incomplete ASDL), the phases are wrong (unresolved coupling), or the function is impure. The fix is always upstream, never at the test site.
+
+This also means the entire testing infrastructure dissolves:
+- **No test framework** — setup/teardown have nothing to set up.
+- **No mocks** — pure functions have no external dependencies.
+- **No fixtures** — ASDL constructors are self-contained.
+- **No regression suite** — memoize is the regression oracle. Same input to changed function: if memoize recomputes, behavior changed.
+- **No property testing library** — ASDL types define the space of valid inputs. Random testing is: random ASDL constructor arguments → call function → assert structural properties.
+- **No flaky tests** — pure functions produce the same output for the same input. Always.
+
+### 5.8 Design for incrementality
 
 The memoize cache is the incremental compilation system. Its effectiveness depends on how the ASDL is structured.
 
-### 6.1 Structural sharing
+#### Structural sharing
 
 When the user edits one track, the other tracks are unchanged. If each Track is ASDL `unique`, the unchanged tracks are the SAME Lua objects in the new project as in the old one. The memoize cache hits on them instantly.
 
@@ -973,16 +1099,16 @@ local new_project = T.Editor.Project(
 -- Track 2 is new. Memoize misses. Only Track 2 recompiles.
 ```
 
-Or with `Unit.with`:
+Or with `U.with`:
 
 ```lua
-local new_track = Unit.with(old_track, { volume_db = -3 })
+local new_track = U.with(old_track, { volume_db = -3 })
 -- Returns a new ASDL node with volume_db changed, all other fields identical.
 -- The devices field is the SAME object as old_track.devices.
 -- Memoize on devices hits.
 ```
 
-### 6.2 The granularity tradeoff
+#### The granularity tradeoff
 
 Finer granularity = more cache hits, but more memoize lookups.
 Coarser granularity = fewer lookups, but more cache misses (bigger recompilation units).
@@ -1004,7 +1130,7 @@ RIGHT (per-node memoize):
 
 The right granularity is: one memoize boundary per IDENTITY NOUN. Each track, each device, each clip, each parameter is a potential cache boundary. The memoize key is the ASDL `unique` node. An edit to one node misses that node's cache entry. Everything else hits.
 
-### 6.3 What makes a good memoize key
+#### What makes a good memoize key
 
 The memoize key is the function's argument list. For it to work correctly:
 
@@ -1023,13 +1149,11 @@ BAD KEYS:
 
 This is why ASDL `unique` is essential. It guarantees that structurally identical nodes are the SAME object. You don't need deep comparison. You don't need hashing. Identity IS equality. And ASDL nodes are immutable — once constructed, they never change. The cache is always consistent.
 
----
-
-## 7. Parallelism Falls Out of the ASDL
+### 5.9 Verify parallelism
 
 The ASDL dependency graph IS the execution plan. Multithreading, parallelization, and execution planning are not features you add on top — they are properties you READ from the ASDL structure.
 
-### 7.1 The graph encodes the dependencies
+#### The graph encodes the dependencies
 
 An ASDL tree is a DAG of immutable values. Every node knows its children. Every memoized function depends only on its explicit arguments. The dependency structure is fully visible before any compilation happens:
 
@@ -1045,7 +1169,7 @@ An ASDL tree is a DAG of immutable values. Every node knows its children. Every 
 
 Nodes that don't share ancestors are independent. Track1 and Track2 can compile in parallel. All four leaf nodes can compile in parallel. The graph tells you which work is independent — you don't need to discover it at runtime with a dependency analysis framework.
 
-### 7.2 Why this works
+#### Why this works
 
 The pattern's purity guarantees make parallelism safe by construction:
 
@@ -1056,7 +1180,7 @@ The pattern's purity guarantees make parallelism safe by construction:
 
 Traditional architectures need thread pools, schedulers, synchronization primitives, and dependency graphs as SEPARATE INFRASTRUCTURE because their dependency information is scattered across mutable state, callbacks, and implicit ordering. The pattern concentrates all dependencies in one place — the ASDL tree — and makes them immutable.
 
-### 7.3 The modeling consequence
+#### The modeling consequence
 
 This has a direct consequence for ASDL design: **the granularity of your ASDL nodes determines the granularity of your parallelism.**
 
@@ -1078,17 +1202,15 @@ TOO FINE:
     → Millions of nodes. Parallelism overhead dominates.
 ```
 
-The same granularity that gives you good incrementality (Section 6) also gives you good parallelism. One memoize boundary per identity noun means one unit of parallelism per identity noun. The design choices compose.
+The same granularity that gives you good incrementality also gives you good parallelism. One memoize boundary per identity noun means one unit of parallelism per identity noun. The design choices compose.
 
-### 7.4 What this eliminates
+#### What this eliminates
 
 No thread pool. No task queue. No fork-join framework. No dependency graph library. No work-stealing scheduler. No futures or promises for compilation coordination. The ASDL graph is all of these things — it just doesn't know it.
 
 This is the same pattern as every other "eliminated" system: the information already exists in the ASDL structure. Building a separate system to represent it is redundant. Building a separate system to manage it is reconciliation work that shouldn't exist.
 
----
-
-## 8. Designing the View / UI Projection
+### 5.10 Design the view projection
 
 Every program has at least two pipelines from the same source:
 
@@ -1100,7 +1222,7 @@ Source ASDL ──transition──> ... ──terminal──> Execution Unit
 
 The execution pipeline produces the domain output (audio, computed cells, game frame). The view pipeline produces the visual representation (pixels on screen). Both start from the same source ASDL. Both are memoized independently. Editing the source recompiles both — but only the changed subtrees.
 
-### 8.1 The View is NOT the source
+#### The view is NOT the source
 
 The View ASDL is different from the source ASDL. The source represents the user's domain model. The View represents the visual presentation of that model. They are different shapes:
 
@@ -1125,7 +1247,7 @@ Source (DAW):                          View:
 
 The same Track appears in three places in the View: the track header, the mixer strip, and the device panel. The View is not a mirror of the source — it is a PROJECTION. One source entity can appear multiple times. Some source entities don't appear at all (depending on what's visible). The View adds layout, sizing, colors, labels, and interaction behaviors that don't exist in the source.
 
-### 8.2 The View's own phase pipeline
+#### The view's own phase pipeline
 
 The View has its own phases:
 
@@ -1143,7 +1265,7 @@ View.Compiled   Unit { fn, state_t } — one function, all GL calls
 
 The projection boundary (`source → View.Decl`) is a `transition` or `projection` function. The View pipeline from Decl to Compiled is its own sequence of transitions and terminals.
 
-### 8.3 The semantic ref connection
+#### The semantic ref connection
 
 Errors from the domain pipeline carry semantic refs (TrackRef, DeviceRef, ClipRef). The View knows which visual elements correspond to which semantic refs (because the projection maintained the mapping). When an error says `DeviceRef(42) failed`, the View finds the visual element for Device 42 and shows the error there.
 
@@ -1151,23 +1273,100 @@ This works because the source ASDL node identity (the `id` field) flows through 
 
 ---
 
-## 9. Common Modeling Mistakes
+## Part 6: Type Design Principles
 
-### 9.1 Modeling the implementation instead of the domain
+This section is a reference for ASDL quality. Look things up here when you're unsure about a specific type design decision.
+
+### 6.1 Sum types are domain decisions
+
+Every sum type in the source ASDL represents a decision the user made. "This is an audio clip, not a MIDI clip." "This is a low-pass filter, not a high-pass." "This parameter is automated, not static."
+
+Later phases RESOLVE these decisions. A sum type that exists in phase N and doesn't exist in phase N+1 was consumed by the transition between them. That transition's job was to resolve that specific decision.
 
 ```
-WRONG (implementation model):
-    AudioEngine = (BufferPool pool, CallbackFn callback,
-                   ThreadHandle thread, MutexHandle lock)
+Editor phase:
+    Device = NativeDevice | LayerDevice | SelectorDevice | ...
+    (user's decision: what kind of container)
 
-RIGHT (domain model):
-    Project = (Track* tracks, Transport transport,
-               TempoMap tempo, AssetBank assets)
+Authored phase:
+    Node = (id, kind: NodeKind, params, ...)
+    (container decision consumed → everything is a Node in a Graph)
+    But NodeKind still has 135 variants — those decisions are consumed LATER
+
+Scheduled phase:
+    Job = (node_id, kind_code: number, params: number*)
+    (NodeKind decision consumed → just a numeric code + parameter array)
+    Zero sum types. Everything is a flat job with numbers.
 ```
 
-The implementation model describes HOW the program works. The domain model describes WHAT the user works with. The pattern compiles the domain model INTO the implementation. If you put the implementation in the source, you're compiling the compiler.
+#### Fewer sum types downstream
 
-### 9.2 Mixing phases
+Each phase should have fewer sum types than the previous phase. This is the NARROWING property. If a phase adds sum types, something is wrong — you're creating decisions instead of consuming them.
+
+The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just concrete fields and predictable access paths. This is what lets the backend optimize aggressively — whether that is LLVM on Terra or host-JIT specialization on LuaJIT — because there is nothing semantic left to dispatch on.
+
+```
+Phase          Sum types          What they represent
+──────────     ──────────         ───────────────────
+Editor         12 enums           User choices
+Authored       8 enums            Container choices resolved
+Resolved       5 enums            References resolved
+Classified     2 enums            Rates classified
+Scheduled      0 enums            Everything is a flat job
+Terminal       0 sum types        Everything is native code
+```
+
+If a phase has more sum types than the previous one, ask: "What new decision was introduced?" Sometimes it's legitimate — a classification phase might introduce a RateClass enum that didn't exist before. But the total decision surface should still be shrinking.
+
+#### Anti-pattern: strings where enums belong
+
+```
+WRONG:
+    Node = (number id, string kind, ...)
+    -- kind = "biquad" — no exhaustiveness checking,
+    -- no variant-specific fields, typos are silent bugs
+
+RIGHT:
+    Node = (number id, NodeKind kind, ...)
+    NodeKind = Biquad { freq: number, q: number }
+             | Gain { db: number }
+             | Sine { freq: number }
+             | ...
+    -- Each variant has its own fields. U.match is exhaustive.
+    -- Adding a variant forces all match sites to handle it.
+```
+
+Strings are bags. Enums are types. Every string that represents a fixed set of options should be an enum. Every string that represents a fixed set of choices with different fields should be an enum with fields.
+
+### 6.2 Records should be deep modules
+
+Each record should be a "deep module" in the Ousterhout sense — a simple interface hiding significant complexity. The record's fields are the interface. The methods that operate on it are the implementation.
+
+```
+SHALLOW (bad — too many fields, too little meaning):
+    BiquadNode = (
+        number b0, number b1, number b2,
+        number a1, number a2,
+        number x1, number x2, number y1, number y2,
+        number frequency, number q, number gain,
+        number sample_rate, number filter_mode
+    )
+
+DEEP (good — meaningful fields, complexity hidden):
+    BiquadNode = (
+        number id,
+        FilterMode mode,       -- what the user chose
+        number frequency,      -- what the user set
+        number q               -- what the user set
+    ) unique
+    -- Coefficients computed during compilation.
+    -- History state owned by the Unit.
+    -- Sample rate is an explicit boundary argument.
+```
+
+The deep version has 4 fields. The shallow version has 14. The deep version is the source phase — what the user decided. The shallow version mixed source decisions (frequency, q) with derived values (coefficients) and runtime state (x1, y1). These belong in different phases.
+
+#### Anti-pattern: mixing phases
 
 ```
 WRONG (mixing source and derived):
@@ -1183,7 +1382,100 @@ RIGHT (source only):
     -- Buffer slots are assigned in the Scheduled phase.
 ```
 
-### 9.3 Over-flattening
+#### Anti-pattern: modeling the implementation instead of the domain
+
+```
+WRONG (implementation model):
+    AudioEngine = (BufferPool pool, CallbackFn callback,
+                   ThreadHandle thread, MutexHandle lock)
+
+RIGHT (domain model):
+    Project = (Track* tracks, Transport transport,
+               TempoMap tempo, AssetBank assets)
+```
+
+The implementation model describes HOW the program works. The domain model describes WHAT the user works with. The pattern compiles the domain model INTO the implementation. If you put the implementation in the source, you're compiling the compiler.
+
+### 6.3 IDs should be structural, not sequential
+
+Every identity noun needs an ID. The ID should support structural comparison (for ASDL `unique` identity). Two approaches:
+
+**Sequential IDs** (simple but fragile):
+```
+Track(1, "Lead", ...) unique
+Track(2, "Bass", ...) unique
+-- What if the user reorders tracks?
+-- Track 1 and Track 2 swap positions.
+-- The IDs stay the same → the memoize cache is correct.
+-- But if IDs were assigned by position, reordering would
+-- invalidate the entire cache.
+```
+
+**Content-derived IDs** (robust):
+```
+-- The ID is part of the unique key, but not the position.
+-- Moving a track changes its position in the list,
+-- but the Track node itself (same ID, same name, same devices)
+-- is the same unique object. Memoize hits.
+```
+
+Rule: IDs should identify the THING, not its POSITION. Moving things should not change their identity. This maximizes memoize cache hits.
+
+### 6.4 Lists vs. maps
+
+ASDL has `*` for lists. It doesn't have maps/dictionaries. If you need key-value lookup, you have two options:
+
+**List with ID lookup** (standard):
+```
+Track = (number id, string name, ...) unique
+Project = (Track* tracks, ...) unique
+-- Look up by: fun.iter(project.tracks):find(function(t) return t.id == id end)
+```
+
+**Sorted list** (for ordered data):
+```
+Breakpoint = (number time, number value) unique
+AutomationCurve = (Breakpoint* points, ...) unique
+-- Points are sorted by time. Binary search for lookup.
+-- Sorted order is an invariant, enforced at construction.
+```
+
+Don't use Lua tables as maps in the source ASDL. ASDL nodes are typed records with known fields. A Lua table is an untyped bag. It breaks memoize (table identity is by reference, not by content). It breaks save/load (no schema for the keys). It breaks the type system (no field validation).
+
+If you need associative data, model it as a list of key-value records:
+
+```
+Setting = (string key, string value) unique
+Settings = (Setting* entries) unique
+-- Not: settings: table (which breaks everything)
+```
+
+### 6.5 Cross-references are IDs, resolved in a later phase
+
+Sometimes one ASDL node needs to reference another that isn't its child. A Send references a target Track. An automation lane references a Parameter. A wire connects two Ports.
+
+Model these as ID references, not Lua references:
+
+```
+WRONG (Lua reference — breaks unique, breaks save/load):
+    Send = (Track target, number gain_db)
+    -- target is a Lua pointer to another node.
+    -- ASDL unique can't hash Lua objects correctly.
+    -- Save/load can't serialize Lua pointers.
+
+RIGHT (ID reference — works with unique, save/load, memoize):
+    Send = (number target_track_id, number gain_db) unique
+    -- target_track_id is a number that references a Track.
+    -- ASDL unique hashes it correctly.
+    -- Save/load serializes it as a number.
+    -- A later phase (Resolved) validates that the ID exists.
+```
+
+Cross-references are resolved in a dedicated phase. The source ASDL contains the INTENT ("send to track 5"). The Resolved phase validates it ("track 5 exists and has the right channel count").
+
+### 6.6 Containment anti-patterns
+
+#### Over-flattening
 
 ```
 WRONG (too flat — loses structure):
@@ -1200,7 +1492,7 @@ RIGHT (structured):
     -- touch Track 1's ASDL node. Memoize hits on Track 1.
 ```
 
-### 9.4 Under-flattening
+#### Under-flattening
 
 ```
 WRONG (too nested — redundant wrapping):
@@ -1217,40 +1509,138 @@ RIGHT (flat enough):
     -- If it's a view decision, it belongs in the View ASDL.
 ```
 
-### 9.5 Missing a phase
+### 6.7 Missing a phase
 
 Symptom: a boundary function is doing two unrelated things. It resolves cross-references AND assigns buffer slots. It lowers containers AND validates connections.
 
 Fix: split into two phases. Each boundary should do ONE kind of knowledge consumption. If it does two, you're missing a phase between them.
 
-### 9.6 Using strings where enums belong
-
-```
-WRONG:
-    Node = (number id, string kind, ...)
-    -- kind = "biquad" — no exhaustiveness checking,
-    -- no variant-specific fields, typos are silent bugs
-
-RIGHT:
-    Node = (number id, NodeKind kind, ...)
-    NodeKind = Biquad { freq: number, q: number }
-             | Gain { db: number }
-             | Sine { freq: number }
-             | ...
-    -- Each variant has its own fields. Unit.match is exhaustive.
-    -- Adding a variant forces all match sites to handle it.
-```
-
-Strings are bags. Enums are types. Every string that represents a fixed set of options should be an enum. Every string that represents a fixed set of choices with different fields should be an enum with fields.
-
-
 ---
 
-## 10. The Implementation Discovery
+## Part 7: Implementation
 
-The modeling method (Sections 1-6) gives you a first draft of the ASDL. That draft is a hypothesis. Implementation tests it. The testing direction is bottom-up: start at the leaves, let each leaf tell you what the layers above must provide, and fix the ASDL from the bottom up.
+### 7.1 The boundary vocabulary
 
-### 10.1 Write the leaf you want to write
+Every boundary function in the pattern is built from six primitives. That's the complete set.
+
+**`U.match(value, arms)`** — exhaustive dispatch on a sum type. Every variant must have a handler. Missing a variant is a compile-time error (from the ASDL, not the Lua runtime — `U.match` checks exhaustiveness).
+
+**`U.errors()`** — creates an error collector. Returns an object with `:each()`, `:call()`, `:merge()`, and `:get()`.
+
+**`errs:each(items, fn, ref_field)`** — maps a list of children through a function, collects errors from any that fail, substitutes neutral values (silent Units) for failures. This is the workhorse — it does mapping, error handling, and fault isolation in one expression.
+
+**`errs:call(target, fn)`** — transforms a single child through a function, collects errors if it fails. Same as `:each()` but for a single value instead of a list.
+
+**`U.with(node, overrides)`** — creates a new ASDL node with some fields changed, all other fields identical. The unchanged fields are the SAME objects (structural sharing preserved). This is how you build new ASDL nodes in reducers.
+
+**ASDL constructor** — `Phase.TypeName(field1, field2, ...)` — builds the output node for the next phase.
+
+Two memoization wrappers declare the boundary's role in the pipeline:
+
+**`U.transition(name, fn)`** — a memoized phase transition. Takes a node from phase N, returns a node in phase N+1.
+
+**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, returns a `Unit { fn, state_t }`.
+
+That's it. No other primitives are needed. If a boundary function reaches for something outside this set — a `for` loop, a `table.insert`, a mutable accumulator, a context argument, a sibling lookup — the ASDL is wrong.
+
+### 7.2 The two canonical shapes
+
+Every boundary function fits one of two shapes.
+
+#### Shape 1: Record boundary
+
+The node is a record with children. Call each child's boundary, collect errors, construct the next-phase node.
+
+```lua
+function Track:lower()
+    local errs = U.errors()
+
+    local devices = errs:each(self.devices, function(d)
+        return d:lower()
+    end, "id")
+
+    local clips = errs:each(self.clips, function(c)
+        return c:lower()
+    end, "id")
+
+    return Authored.Track(self.id, self.name, devices, clips), errs:get()
+end
+```
+
+#### Shape 2: Enum boundary
+
+The node is a sum type. Dispatch on the variant.
+
+```lua
+function Device:lower()
+    return U.match(self, {
+        NativeDevice = function(self)
+            local errs = U.errors()
+            local params = errs:each(self.params, function(p)
+                return p:lower()
+            end, "id")
+            return Authored.Node(self.id, self.kind, params), errs:get()
+        end,
+        LayerDevice = function(self)
+            local errs = U.errors()
+            local children = errs:each(self.devices, function(d)
+                return d:lower()
+            end, "id")
+            return Authored.Graph(self.id, children, {}), errs:get()
+        end,
+    })
+end
+```
+
+Notice that inside each `U.match` arm, the body is just a record boundary again — `errs:each` children, construct output. The two shapes nest: enums dispatch to record-shaped bodies.
+
+If your boundary function doesn't fit either of these shapes, one of these is true:
+- The ASDL is missing a field (the leaf needs data that isn't on the node)
+- The ASDL is missing a phase (the boundary does two unrelated things)
+- The containment hierarchy is wrong (the node needs a sibling's data)
+- A sum type is missing (imperative control flow compensates for a missing variant)
+
+### 7.3 The purity test
+
+Every boundary function is a pure structural transform. The quality test:
+
+- **No mutation.** The function never modifies its input. It constructs a new ASDL node.
+- **No accumulators.** No `table.insert` into a table defined outside the function. `errs:each` is the accumulator — it's built into the primitive.
+- **No context arguments.** The function takes `self` (the ASDL node) and nothing else. If it needs data that isn't on `self`, that data should have been placed there by a prior phase.
+- **No sibling lookups.** The function never reaches into a parent or sibling node. If it needs sibling data, a prior phase should have resolved the reference and placed the data on this node.
+- **No imperative control flow.** No `break`, no early `return` inside a loop, no `if/else` chains that select behavior based on type — that's what `U.match` is for.
+
+When a boundary resists these constraints, the resistance is diagnostic. It tells you exactly what's wrong with the ASDL and where to fix it:
+
+```
+"I need a mutable accumulator"
+    → The data isn't self-contained per node. A prior phase should
+      make each node independent.
+
+"I need to look up another node by ID"
+    → A Resolved phase should have already linked the reference.
+      After resolution, the data the node needs is ON the node.
+
+"I need a context argument"
+    → The node doesn't carry everything the function needs.
+      Either the ASDL is missing a field, or a prior phase should
+      have attached the needed data.
+
+"I need if/else to handle different cases"
+    → A sum type is missing. The cases should be variants.
+      U.match handles them exhaustively.
+
+"I need to break out of a loop"
+    → The loop is compensating for heterogeneous data.
+      The data should be uniform (same type per list) or
+      separated into different lists by a prior phase.
+```
+
+### 7.4 Leaves-up discovery
+
+The modeling method (Part 2) gives you a first draft of the ASDL. That draft is a hypothesis. Implementation tests it. The testing direction is bottom-up: start at the leaves, let each leaf tell you what the layers above must provide, and fix the ASDL from the bottom up.
+
+#### Write the leaf you want to write
 
 Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one phase-local node and produces a `Unit` for the machine. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
 
@@ -1381,7 +1771,7 @@ When you imagine the leaf, inspect these questions explicitly.
 
 These questions are architectural, not micro-optimization. The goal is not to hand-tune LLVM. The goal is to choose the right machine shape so the phases above it become obvious.
 
-### 10.2 Modify the layer above
+#### Modify the layer above
 
 Once the leaf exists — even as a sketch — move exactly one level up. Ask:
 
@@ -1419,13 +1809,13 @@ source ASDL:       add stable widget IDs, typed bindings, typed constraints
 
 This is the recursive process: each layer is shaped by the demands of the layer below it. The source ASDL is the LAST thing that settles, not the first. The modeling method gave you a draft. The leaves correct it.
 
-### 10.3 Why this gives the earliest ASDL warnings
+#### Why this gives the earliest ASDL warnings
 
 The leaf compiler is the smallest function in the system — often 10-20 lines. It is also the most honest function. It has no room to hide a bad ASDL.
 
 ```
 Missing field           → ASDL is incomplete, add to source and propagate
-LuaFun resistance       → prior phase didn't resolve a coupling
+Purity resistance       → prior phase didn't resolve a coupling
 Trivial function        → identity noun is too fine-grained (merge nodes)
 Enormous function       → identity noun is too coarse (split the type)
 Needs sibling context   → containment hierarchy is wrong
@@ -1445,7 +1835,7 @@ This is why the kernel sketch matters so much. It exposes whether the bake/live 
 
 The kernel is where optimistic abstraction ends. Either the needed knowledge is there, or it isn't.
 
-### 10.4 The design cycle
+### 7.5 The design cycle
 
 Design and implementation are not sequential. They interleave.
 
@@ -1474,7 +1864,7 @@ This is why the design method has two directions:
 
 Top-down tells you what the user is editing. Bottom-up tells you what the machine must run. The correct pipeline is the one where these meet cleanly in the middle.
 
-You model a bit (Sections 1-6), sketch a kernel, discover the model is wrong, fix it, sketch the next leaf, discover another missing phase, fix that. The modeling method tells you WHERE to look — which nouns, which phases, which coupling points. The leaves tell you WHAT to put there — which fields, which resolutions, which phase boundaries. Neither works alone. Together, they converge on the correct ASDL: the one where every leaf is a natural LuaFun chain, every phase transition has one real verb, and the installed machine is exactly the one you wanted to build.
+You model a bit (Part 2), sketch a kernel, discover the model is wrong, fix it, sketch the next leaf, discover another missing phase, fix that. The modeling method tells you WHERE to look — which nouns, which phases, which coupling points. The leaves tell you WHAT to put there — which fields, which resolutions, which phase boundaries. Neither works alone. Together, they converge on the correct ASDL: the one where every leaf is a natural pure structural transform, every phase transition has one real verb, and the installed machine is exactly the one you wanted to build.
 
 The convergence criterion is:
 
@@ -1482,10 +1872,395 @@ The convergence criterion is:
 
 When that's true, the ASDL is done. When it's not, the resistance tells you exactly what to fix and where.
 
+### 7.6 The memoize-hit-ratio test
+
+Once the pipeline exists, there is an extremely practical design test:
+
+> **What percentage of memoized boundaries hit the cache during realistic edits?**
+
+This is not a backend-speed metric. It is a design-quality metric.
+
+If one small edit causes:
+
+- one or two local misses
+- a few expected parent misses
+- many sibling hits
+
+then the ASDL decomposition is probably healthy.
+
+If one small edit causes:
+
+- misses across most leaves
+- misses across unrelated siblings
+- misses at boundaries that should have been unaffected
+
+then the design is telling you something is wrong.
+
+Typical causes include:
+
+- structural sharing is broken (deep copy instead of `U.with`)
+- IDs are unstable
+- memoize keys include volatile data
+- a boundary is too coarse
+- a source node is carrying too much unrelated state
+- a phase is flattening away locality too early
+
+This is important because it turns architectural quality into an observable quantity.
+
+A high hit ratio means:
+
+- edits are local
+- identities are stable
+- phases are well scoped
+- the ASDL matches the natural incrementality of the domain
+
+A low hit ratio means the opposite.
+
+The especially useful metric is not only the global hit ratio, but **misses per edit**:
+
+- change one biquad frequency → how many boundaries miss?
+- mute one track → how many boundaries miss?
+- insert one paragraph → how many boundaries miss?
+
+That number is the architectural cost of one user action.
+
+In practice, it helps to give important boundaries explicit names so the inspector report is readable:
+
+- `U.transition("lower_track", fn)`
+- `U.terminal("compile_node", fn)`
+- `U.memo_measure_edit(...)`
+- `U.memo_report()`
+
+So once you have memoize instrumentation, treat the report as a design inspector:
+
+- **90%+ reuse** usually means the decomposition is excellent
+- **70–90% reuse** is often healthy but worth inspecting
+- **below 50% reuse** usually means the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
+
+There is one expected caveat: the root boundary often misses on every edit. That is normal. The real question is whether the leaves and intermediate structural boundaries are reusing their work.
+
+In other words:
+
+> **The cache hit ratio is the design-quality metric for incremental compilation.**
+
+Use it the same way you use the save/load test, the undo test, and the purity test: not as a performance tweak, but as a diagnostic for whether the model and phase boundaries are right.
 
 ---
 
-## 11. Worked Examples
+## Part 8: The Backend-Neutral Architecture
+
+### 8.1 The pattern is not Terra
+
+This architecture was historically called the Terra Compiler Pattern because Terra was the environment in which it first became unmistakably visible. Terra made the compiler-like nature hard to miss: you could literally build code as code, synthesize native state layouts, and hand the result to LLVM.
+
+But the deeper discovery is: **the pattern is not fundamentally about Terra.**
+
+The pattern is: the user is editing a program in a domain language, that program is represented as source ASDL, input is represented as Event ASDL, state changes are modeled by a pure Apply reducer, unresolved knowledge is consumed across real phases, phase-local structures are realized as specialized executable Units, and execution runs those Units until the source changes again.
+
+None of that requires Terra specifically. Terra is one way to realize the backend step — a very strong one — but still just one backend.
+
+Terra revealed the pattern. It did not define it.
+
+### 8.2 The three-layer architecture
+
+The architecture has three layers:
+
+```
+┌───────────────────────────────────────────────┐
+│                 YOUR DOMAIN                   │
+│                                               │
+│  source ASDL, Event ASDL, Apply,              │
+│  phase structure, projections, Machine IR      │
+│  intent, domain semantics                     │
+│                                               │
+│  This is your application.                    │
+├───────────────────────────────────────────────┤
+│               THE PATTERN                     │
+│                                               │
+│  Unit, gen/param/state, transition,           │
+│  terminal, memoize, match, with,              │
+│  fallback, errors, inspect                    │
+│                                               │
+│  This is the compiler architecture vocabulary │
+│  used to express the app.                     │
+├───────────────────────────────────────────────┤
+│                THE BACKEND                    │
+│                                               │
+│  leaf realization, state layout, compose      │
+│  realization, installation, hot swap,         │
+│  target drivers, host compiler/JIT            │
+│                                               │
+│  This is target-specific.                     │
+└───────────────────────────────────────────────┘
+```
+
+**Layer 1: Domain** — The application's actual semantic content. Source ASDL, Event ASDL, Apply, the real phases, projections, Machine IRs, terminal inputs. This is where questions like "what is a track?" and "what should save/load preserve?" live. This layer is not backend-specific.
+
+**Layer 2: Pattern** — The reusable compiler vocabulary. Unit, transition, terminal, memoize, match, with, errors, inspect. This layer is not the app's semantics, but it gives the app a disciplined way to express them.
+
+**Layer 3: Backend** — How a leaf becomes executable code on this target. How runtime state is represented. How Units are installed and swapped. How external drivers are called. This is where Terra and LuaJIT differ.
+
+### 8.3 What should be shared across backends
+
+For a well-factored app, the following should be shared:
+
+- the source ASDL
+- the Event ASDL
+- the Apply reducer
+- phase boundaries and their semantic meaning
+- view projection logic
+- terminal intent and terminal input design
+- structural helper logic
+- tests for pure-layer behavior
+
+If changing backends requires changing large parts of this core, target concerns leaked too far upward.
+
+### 8.4 What should vary across backends
+
+- the exact representation of Unit
+- the exact representation of state_t
+- how compose realizes structural aggregation
+- the exact leaf code shape
+- installation and hot-swap mechanics
+- driver integration
+- the host compiler or JIT relied upon
+
+### 8.5 Backend policy: LuaJIT by default, Terra by opt-in
+
+This reframing leads to a practical policy:
+
+> **LuaJIT by default. Terra by opt-in.**
+
+That is not a demotion of Terra. It is a clarification of its role.
+
+LuaJIT should be the default backend on JIT-native platforms because:
+
+- the host runtime already provides much of the final compiler (JIT, specialization, native code)
+- terminal construction is extremely cheap compared to LLVM
+- deployment is lighter, iteration is faster
+- scalar steady-state performance is highly competitive
+- the same architecture applies cleanly
+
+But LuaJIT is NOT the permissive dynamic-tables backend. The backend contract is still strict. Pure phases remain typed ASDL + pure structural transforms. Terminal leaves must lower to monomorphic LuaJIT code over typed FFI/cdata-backed state and payload layouts. If the leaf still wants arbitrary tables, missing-field checks, tag strings, or interpreter-style tree walking, the lowering is not finished.
+
+### 8.6 What makes Terra special
+
+Terra becomes the opt-in strong backend when you need what only Terra gives clearly and reliably:
+
+**Explicit staging.** In Terra, the separation between compiler-side logic, generated code, and runtime execution is concrete and programmable. You can literally emit specific branch structures, inline known choices, and specialize paths — not by shaping code and hoping the JIT notices, but by authoring the generated machine directly.
+
+**Static native types.** A Terra Unit can own a native function with a concrete signature, a native state_t with exact fields, explicit pointer-level access patterns, and concrete data layout known at compile time.
+
+**Struct synthesis in compose.** Because child state layouts are native types, `Unit.compose` can synthesize larger native state layouts structurally — one explicit composite struct reflecting the containment hierarchy.
+
+**ABI control.** When the integration boundary demands a specific calling convention or data layout, Terra provides it directly.
+
+**LLVM optimization.** Constants baked into code, dead code elimination, instruction selection, vectorization potential — LLVM continues simplifying from where the terminal left off.
+
+### 8.7 Terra as design pressure
+
+One subtle but important point: Terra matters for more than raw speed.
+
+Terra also acts as design pressure. Because it forces explicitness in type layout, staging boundaries, state ownership, machine shape, and compilation granularity, it often reveals missing phases, vague source models, coarse recompilation boundaries, and unclear authored/runtime splits.
+
+A good mental model is:
+
+> design with Terra-level explicitness in mind, even when LuaJIT is the default realization backend.
+
+Once the LuaJIT backend is constrained correctly, a second statement also becomes true:
+
+> strict LuaJIT can impose almost the same architectural pressure, because the leaf must still end as `Unit { fn, state_t }` over typed backend-native layout.
+
+The difference is that Terra provides stronger mechanical enforcement through explicit native staging, while LuaJIT provides the same pressure only if the backend rules are kept strict.
+
+### 8.8 When to opt into Terra
+
+Terra is especially worthwhile when:
+- explicit staging control matters more than build speed
+- exact struct layout and ABI compatibility are required
+- LLVM can materially outperform the host JIT for this kernel family
+- the workload is heavy enough that LLVM compile cost is repaid by runtime throughput
+- native interop requires direct low-level expression
+
+### 8.9 A practical opt-in policy
+
+1. Design the domain backend-neutrally
+2. Design leaves with Terra-level explicitness in mind
+3. Implement the shared pure layer once
+4. Target LuaJIT first on JIT-native platforms
+5. Benchmark the important leaf families and compositions
+6. Opt into Terra where explicit native power buys enough
+
+---
+
+## Part 9: Performance Model
+
+### 9.1 Performance is not just steady-state throughput
+
+Because this architecture is built around a live compile loop, performance must be understood across two dimensions:
+
+1. **Rebuild cost** — how expensive it is to rebuild the machine when the source changes
+2. **Run cost** — how efficiently the rebuilt machine runs once installed
+
+Both matter. A backend that produces brilliant machine code but is very expensive to rebuild may be the wrong default for interactive workloads. A backend that rebuilds instantly but executes too slowly may also be wrong.
+
+### 9.2 The first performance question is architectural
+
+In this pattern, the first useful performance question is often not "what function is hot?" but rather:
+
+> why did this change require this amount of recompilation?
+
+That question immediately points toward the actual architecture:
+
+- Did Apply fail to preserve structural sharing?
+- Are identity boundaries too coarse?
+- Is source containment too broad?
+- Is a transition doing too much work over too much structure?
+- Is a terminal compiling too large a region at once?
+- Did a later phase flatten away locality too early?
+
+These are architectural issues, not micro-optimization issues. Performance debugging often becomes a question about model boundaries and phase clarity rather than about scattered runtime heuristics.
+
+### 9.3 Rebuild cost
+
+Rebuild cost is paid when the source program changes. It includes:
+
+- reducer work
+- structural allocation of changed nodes
+- transition recomputation
+- terminal recomputation
+- backend-specific Unit construction
+- installation or hot swap of the new compiled artifact
+
+In interactive systems, rebuild cost is part of the user experience. Every keystroke, every parameter tweak, every node move potentially triggers a rebuild. Rebuild latency affects responsiveness, live feel, and confidence that the system is truly incremental.
+
+This is why cheap terminal construction matters so much. LuaJIT wins an enormous amount on rebuild cost — producing specialized closures and FFI state layouts is dramatically cheaper than an explicit LLVM-backed path.
+
+### 9.4 Run cost
+
+Run cost is the cost of the installed machine while executing: callback throughput, draw loop throughput, state access cost, arithmetic cost, memory locality in the hot path.
+
+If the installed machine is too slow, the architecture still fails. Audio callbacks at 44.1kHz, 60fps rendering, and low-latency simulation all impose hard run-cost constraints.
+
+### 9.5 The bake/live split
+
+One of the most useful performance questions at the terminal boundary is:
+
+> what should shape `gen`, what should remain stable in `param`, and what should remain mutable in `state_t`?
+
+**Bake into the machine when:**
+- the fact is compile-time-known for the subtree
+- removing the variability simplifies control flow materially
+- constant propagation or specialization will help
+- it reduces repeated branching in the hot path
+
+Examples: fixed operator kind, fixed blend mode, known channel count, resolved shadow kind, known filter topology.
+
+**Keep live in state_t when:**
+- the value is execution-time mutable
+- the value changes frequently without requiring semantic recompilation
+- the machine genuinely needs runtime ownership of it
+- rebuilding for every tiny change would be the wrong tradeoff
+
+Examples: filter delay history, counters, mutable buffers, smoothing state, backend-owned handles.
+
+The right bake/live split often determines whether a leaf feels compiled or still half interpreted.
+
+### 9.6 Narrowing sum types early helps both costs
+
+A wide sum type reaching the hot path hurts run cost (the machine keeps branching on semantic alternatives) and hurts rebuild cost (terminals become more complex when they must interpret broad authored structure). That is why later phases should narrow rather than widen. A good terminal input should be much more monomorphic than the authored source.
+
+### 9.7 Locality is performance
+
+If the source model and phases preserve locality well, then small edits change small subtrees, memoization hits stay high, terminals re-run only where necessary, and installation work stays smaller. If locality is poor, performance suffers before any low-level arithmetic question even arises.
+
+This is why stable IDs, honest containment, and structural sharing are so central to the architecture's performance story.
+
+### 9.8 The recursive benchmarking law
+
+Once a lower machine is trusted, the next slow boundary points upward into the language and phase design above it. The biggest performance wins often come first from better source modeling, better identity boundaries, narrower phases, better Unit granularity, and better bake/live decisions — and only after those are right do low-level backend optimizations pay their full value.
+
+A poor source model can waste more performance than a clever arithmetic trick can recover. A missing phase can cost more than a backend micro-optimization can save. A bad Unit boundary can dominate everything downstream.
+
+### 9.9 The memoize-hit-ratio test
+
+There is also a highly practical metric that sits between modeling and performance:
+
+> **the memoize hit ratio at real stage boundaries**
+
+This metric measures the architecture more directly than raw throughput does. If one small edit causes a few local misses and many sibling hits, the decomposition is healthy. If one small edit causes misses across unrelated leaves and widespread recompilation, the ASDL or phase boundaries are wrong.
+
+Instrumentation through `U.memo_report()`, `U.memo_measure_edit()`, and `U.memo_quality()` makes this observable. The hit ratio is the design-quality metric for incremental compilation.
+
+- **90%+ reuse** — decomposition is excellent
+- **70–90% reuse** — healthy but worth inspecting
+- **below 50% reuse** — the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
+
+### 9.10 Backend-specific performance questions
+
+**LuaJIT-oriented:** Are the emitted closures monomorphic enough to trace well? Are important constants captured in upvalues? Is state access stable and cheap via FFI? Are loops and composition shapes simple enough for the JIT?
+
+**Terra-oriented:** Are we staging the right facts into emitted code? Is the native state layout as explicit and local as it should be? Are we paying LLVM cost at the right granularity? Is the compile tax worthwhile with sufficient steady-state benefit?
+
+Different questions, same architectural frame.
+
+---
+
+## Part 10: What the Pattern Eliminates
+
+The pattern does not eliminate complexity by pretending complex programs are simple. It eliminates infrastructure by removing the architectural conditions that made so much coordinating machinery necessary in the first place.
+
+In many conventional designs, a large amount of system complexity exists because the architecture has multiple overlapping partial truths — a runtime object graph, a store or model layer, a rendering layer with its own derived structures, caches remembering what changed, invalidation rules tracking who depends on whom, controller/service logic that reinterprets the same domain repeatedly. When those partial truths drift, the system needs more machinery to reconcile them.
+
+The compiler pattern reduces that need because the source program is explicit, interaction is explicit, phase boundaries are explicit, compiled artifacts are explicit, state ownership is explicit, and recompilation is driven structurally rather than by ad hoc invalidation protocols.
+
+### 10.1 State management frameworks
+
+Centralized stores that become shadow architectures, action/effect plumbing, observer-heavy propagation systems, elaborate consistency protocols between multiple runtime models. In the compiler pattern, the source ASDL is the authored program, Apply computes the next source ASDL, later phases derive what should run. The state is no longer architecturally mysterious. You do not need meta-infrastructure just to answer "what is the application right now?"
+
+### 10.2 Invalidation frameworks
+
+Complex machinery to track what changed, what needs recomputation, what caches must be repaired. In this pattern, structural identity plus memoized boundaries handle it: unchanged nodes hit the cache, changed nodes miss it. Incrementality is not a second architecture bolted onto the first one.
+
+### 10.3 Observer buses and event-dispatch webs
+
+Listeners, subscriptions, bubbling systems, change-notification graphs. Much of this becomes unnecessary when inputs are modeled as Event ASDL, Apply is the explicit state transition, and later phases rederive consequences structurally. Instead of "notify everyone who might care and let them each mutate their corner," the story is: represent what happened explicitly, compute the next program, recompile the consequences.
+
+### 10.4 Dependency-injection containers and service-locator architecture
+
+Global service access accumulates because key functions cannot get the information they need structurally from their inputs. Service containers, DI graphs, registries passed everywhere, context objects threaded through all operations. These are often symptoms that the source model or phase structure is underspecified — missing source fields, missing resolution phases, hidden cross-references. The better fix is architectural, not infrastructural.
+
+### 10.5 Hand-built runtime interpretation layers
+
+Perhaps the biggest elimination: the accidental interpreter itself. Dynamic dispatch tables over variants, generic node walkers asking "what are you?" repeatedly, runtime graph traversals rediscovering semantic facts, renderer-style command systems that are really uncompiled authored trees, general callback routers deciding domain behavior on the fly. The compiler pattern consumes that uncertainty earlier. By the time execution runs, those questions should already have been answered.
+
+### 10.6 Redundant test scaffolding
+
+Mocks for services, fake runtime environments, setup frameworks, elaborate fixtures standing in for global state. In the pure layer, tests reduce to: construct ASDL input, call function, assert output. When such tests become difficult, something hidden is leaking into the supposedly pure layer.
+
+### 10.7 Redundant runtime ownership machinery
+
+External state registries, independent lifecycle managers for compiled children, detached runtime objects mirroring compiled structure. Because Units pair behavior with owned runtime state, lifecycle concerns are more often represented structurally by the Unit composition itself rather than by a second architecture.
+
+### 10.8 The general principle
+
+> The pattern eliminates glue whose only job was to reconnect truths that should never have been split apart.
+
+If authored truth and semantic truth are explicitly connected by transitions, less glue. If compiled behavior and state ownership are one Unit, less glue. If change propagation is handled by identity plus memoization, less glue. If interaction is an explicit Event language, less glue.
+
+### 10.9 What does not disappear
+
+The pattern does not eliminate: the need for careful domain modeling, backend engineering, integration with drivers/OS/graphics/audio, operational error handling, performance work, or judgment about phase design and Unit granularity. It moves complexity to places where it is more explicit, more local, and more meaningful.
+
+### 10.10 A warning against reintroducing the eliminated machinery
+
+Once the pattern starts simplifying a codebase, there is a temptation to reintroduce the old furniture by habit: adding a state manager where the source ASDL should suffice, adding an observer bus where Event ASDL + Apply should suffice, adding invalidation flags where identity + memoize should suffice, adding a service container where a resolution phase should suffice, adding runtime registries where Unit composition should suffice.
+
+Sometimes these tools are genuinely needed at specific backend boundaries. But they should be treated as exceptions that require justification, not as default architecture.
+
+---
+
+## Part 11: Worked Examples
 
 ### 11.1 Text editor
 
@@ -1652,11 +2427,61 @@ This is a subtlety: not everything can be baked. Per-frame-changing values (phys
 
 ---
 
-## 12. The Master Checklist
+## Part 12: What You Can Build
+
+The pattern is applicable anywhere the user is editing a structured program in some domain and where repeated specialization is a better architectural fit than repeated interpretation.
+
+The general rule: a good domain for this pattern has structured persistent domain objects with meaningful identity and relationships, interaction that changes the authored program over time, later computation that depends on derived semantic decisions, a final runtime workload that benefits from specialization, and where repeated interpretation of the full domain structure would be wasteful or architecturally messy.
+
+### 12.1 Audio tools and synthesizers
+
+Audio is one of the clearest fits. The domain naturally has explicit user-authored structure, graph or chain composition, stable identities for devices/clips/nodes/parameters, derived semantic phases (resolution, scheduling, coefficient computation), and a hot execution path where repeated interpretation is undesirable. Synth graphs, effects chains, modular routing, sequencers, DAWs, live performance tools.
+
+### 12.2 Text editors and structured editors
+
+A serious editor contains rich structure: documents, blocks, spans, cursors, selections, marks, style rules, folding state. Events edit that structure: insert, delete, move cursor, change selection, apply formatting. Later phases resolve styles, shape text, compute line layout, derive paint-ready runs, produce hit-test structures. The visual execution layer benefits from receiving something much narrower than the raw authored model. Especially compelling in structured editors where the source is richer than text.
+
+### 12.3 UI systems and retained declarative interfaces
+
+A retained UI tree is already very close to a source program. It contains nodes, layout declarations, visual style, content, interaction bindings, view state. Events edit it, phases resolve styles/bindings, compute layout, flatten paint operations, produce draw/hit-test Units. The same architecture that drives an audio compiler drives a UI compiler — different source vocabulary, same compilation story.
+
+### 12.4 Spreadsheets and notebooks
+
+Sheets, cells, formulas, charts, formatting rules. Formulas parse to expression trees, references validate into dependency graphs, evaluation IS compilation. The compiled spreadsheet doesn't interpret formulas — it runs a native function that produces all cell values. Notebooks extend this with richer cell types and execution semantics.
+
+### 12.5 Drawing and scene editors
+
+Shapes with transforms, styles, layers. Transforms resolve to absolute, groups flatten, bounds compute, text shapes, draw calls sort by GPU efficiency. The same compilation pipeline as UI — different source vocabulary (artistic properties vs layout properties), same draw-call terminal.
+
+### 12.6 Protocol engines and structured communication
+
+If a system processes structured messages through semantic phases — validate, bind, classify, route, respond — it may fit the compiler shape. Source model may be session or protocol state, events are incoming messages, phases resolve and classify, terminals produce specialized handlers.
+
+### 12.7 Simulations and live-authored systems
+
+Scenario editors, physics setup tools, rule-based world configuration, interactive simulations with authored entities and behaviors. Source model contains entities, relationships, parameters, scenario structure. Later phases validate references, classify behavior families, derive execution schedules, compile step/query/render Units.
+
+### 12.8 Multi-output tools
+
+Tools where the same source program feeds multiple outputs: execution, editor view, inspector/debugger, export/build artifacts. The architecture already assumes multiple memoized products from the same source. This is much cleaner than inventing several loosely synchronized models that each think they are the real app state.
+
+### 12.9 The applicability test
+
+The right question is not "is my domain like audio codegen?" The right question is:
+
+> is my user editing a structured program whose meaning I keep rediscovering at runtime, and would it be better to compile that meaning into narrower machines?
+
+### 12.10 What is a weaker fit
+
+The pattern is a weaker fit when there is little or no persistent authored structure, no meaningful phase boundaries, execution is inherently generic and does not benefit from specialization, the domain is mostly ad hoc dynamic scripting with little stable semantic structure, or the cost of modeling the source language exceeds the value of the resulting clarity.
+
+---
+
+## Part 13: The Master Checklist
 
 Before writing any implementation, answer these questions about your source ASDL:
 
-### 12.1 Domain nouns
+### 13.1 Domain nouns
 ```
 □ Listed every user-visible noun
 □ Classified each as identity noun or property
@@ -1665,7 +2490,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No implementation nouns in the source (no buffers, threads, callbacks)
 ```
 
-### 12.2 Sum types
+### 13.2 Sum types
 ```
 □ Every "or" in the domain is an enum
 □ Every enum has ≥ 2 variants
@@ -1675,7 +2500,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Every user action produces a valid variant
 ```
 
-### 12.3 Containment
+### 13.3 Containment
 ```
 □ Drawn the containment tree
 □ Each parent owns its children (no shared ownership)
@@ -1684,7 +2509,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Recursive types use * or ? (no infinite structs)
 ```
 
-### 12.4 Phases
+### 13.4 Phases
 ```
 □ Named each phase
 □ Named each transition verb (lower, resolve, classify, schedule, compile)
@@ -1695,7 +2520,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No phase should be split without a clear additional decision to resolve
 ```
 
-### 12.5 Coupling points
+### 13.5 Coupling points
 ```
 □ Identified every place where two subtrees need each other's information
 □ Determined which must be resolved in the same phase
@@ -1703,7 +2528,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ These orderings are consistent (no cycles between phases)
 ```
 
-### 12.6 Quality tests
+### 13.6 Quality tests
 ```
 □ Save/load: every user-visible aspect survives round-trip
 □ Undo: reverting to previous ASDL node restores everything
@@ -1715,7 +2540,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No function needs mocks, fixtures, setup, teardown, or ordering
 ```
 
-### 12.7 Incremental compilation
+### 13.7 Incremental compilation
 ```
 □ ASDL types are marked unique
 □ Edits produce new nodes with structural sharing (not deep copy)
@@ -1724,7 +2549,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Unchanged subtrees are identical Lua objects (not copies)
 ```
 
-### 12.8 Parallelism
+### 13.8 Parallelism
 ```
 □ Independent subtrees can compile in parallel (no shared mutable state)
 □ Memoize boundaries align with parallelism units (one per identity noun)
@@ -1732,17 +2557,44 @@ Before writing any implementation, answer these questions about your source ASDL
 □ No implicit ordering between independent branches
 ```
 
-### 12.9 LuaFun enforcement
+### 13.9 Purity enforcement
 ```
-□ Every transition function is expressible as a LuaFun chain
-□ Every reducer arm is expressible as a LuaFun chain
+□ Every boundary is a pure structural transform
+□ Every boundary uses the canonical shape (record or enum)
+□ The boundary vocabulary is: U.match, errs:each, errs:call, U.with, constructor
 □ No mutable accumulators needed (data is self-contained per node)
 □ No mid-chain lookups needed (references resolved in prior phase)
-□ No imperative control flow needed (sum types handled by Unit.match)
-□ If a function resists LuaFun → fix the ASDL, not the code
+□ No imperative control flow needed (sum types handled by U.match)
+□ If a boundary resists the canonical shape → fix the ASDL, not the code
 ```
 
-### 12.10 View / UI
+### 13.10 Compilation/execution split
+```
+□ Each function is either deciding what machine should exist or being the machine
+□ Compilation-side code is pure, structural, memoized
+□ Execution-side code is specialized, state-owning, operational
+□ No architecture-level reasoning happens in the execution layer
+□ Terminals are on the compilation side, even though they produce executable artifacts
+```
+
+### 13.11 Unit design
+```
+□ Each terminal produces a Unit { fn, state_t }
+□ state_t contains only execution-time mutable data, not authored choices
+□ Bake/live split is explicit: compile-time-known → baked, runtime-mutable → state_t
+□ The canonical machine (gen/param/state) is clear before packaging as Unit
+□ Unit composition reflects source containment structure
+```
+
+### 13.12 Machine IR (when applicable)
+```
+□ Terminal input makes order, addressability, use-sites, resource identity, and state needs explicit
+□ The machine receives typed shapes, not generic wiring it must interpret
+□ If later branches share structure, headers carry the shared spine
+□ If later branches need different aspects, facets carry orthogonal semantic planes
+```
+
+### 13.13 View / UI
 ```
 □ View is a separate ASDL, projected from source
 □ View elements carry semantic refs back to source
@@ -1750,10 +2602,10 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Errors flow from domain pipeline to View via semantic refs
 ```
 
-### 12.11 Implementation discovery (leaves-up)
+### 13.14 Implementation discovery (leaves-up)
 ```
 □ Started at leaf compilers, not at top-level pipeline
-□ Each leaf compiles as a clean LuaFun chain — no reaching, no context args
+□ Each leaf compiles as a clean structural transform — no reaching, no context args
 □ Missing fields discovered by leaves were added to ASDL and propagated up
 □ Layers above were modified to provide what leaves demanded
 □ ASDL stabilized when leaves stopped demanding changes
@@ -1762,33 +2614,7 @@ Before writing any implementation, answer these questions about your source ASDL
 
 ---
 
-## 13. The Deep Insight
-
-The ASDL is not a data format. It is not a schema. It is not a description of what the program stores.
-
-The ASDL is a LANGUAGE.
-
-The source ASDL is the input language of a compiler. The user is the programmer. The UI is the IDE. Every user gesture is a program edit. Every edit produces a new program (a new ASDL tree). The compiler compiles it. The output runs.
-
-Getting the ASDL right means getting the LANGUAGE right. A good language has:
-- Clear nouns (types that correspond to domain concepts)
-- Clear verbs (edits that produce new valid programs)
-- Orthogonal features (independent fields that don't interfere)
-- Completeness (every valid state is expressible)
-- Minimality (no redundancy, no derived values)
-- Composability (small pieces combine into larger programs)
-
-These are the same properties that make a PROGRAMMING LANGUAGE good. Because that's what the source ASDL is — a domain-specific programming language whose programs are domain artifacts (songs, documents, spreadsheets, games) and whose compiler produces native executables that realize those artifacts.
-
-Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. The Unit is the object code.
-
-And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, and the same transitions can realize Terra/LLVM native code, LuaJIT-specialized closures, JavaScript, or WASM. Only the leaf compilation — the terminal boundary where ASDL becomes executable machinery — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
-
-Design the language well, and the compiler writes itself. Design it poorly, and no amount of implementation effort can fix it. The ASDL is the architecture. Everything else is derived.
-
----
-
-## 14. Summary
+## Summary
 
 ```
 THE MODELING METHOD
@@ -1817,11 +2643,11 @@ THE MODELING METHOD
    Name the verb. If you can't name it, the phase shouldn't exist.
    Terminal phase has zero sum types.
 
- 7. TEST THE SOURCE ASDL
-    Save/load, undo, completeness, minimality,
-    orthogonality, collaboration, testing.
-    Every function testable with one constructor + one assertion.
-    Fix before implementing.
+7. TEST THE SOURCE ASDL
+   Save/load, undo, completeness, minimality,
+   orthogonality, collaboration, testing.
+   Every function testable with one constructor + one assertion.
+   Fix before implementing.
 
 8. DESIGN FOR INCREMENTALITY
    ASDL unique. Structural sharing on edits.
@@ -1840,7 +2666,7 @@ THE MODELING METHOD
     Start at the leaf compiler. Write the function you want to write.
     The leaf tells you what the ASDL must provide.
     Fix the layer above. Recurse upward to the source ASDL.
-    Every function is a LuaFun chain. If it resists — fix the ASDL.
+    Every boundary is a pure structural transform. If it resists — fix the ASDL.
 
 12. CONVERGE
     Steps 1-10 give a top-down draft. Step 11 tests it bottom-up.
@@ -1848,4 +2674,47 @@ THE MODELING METHOD
     Design and implementation interleave until convergence.
 ```
 
-The hard part is steps 1-10. Step 11 is where the leaves either confirm the design is right or send you back to fix it. The direction is bottom-up: write the leaf you want to write, discover what it needs, modify each layer above to provide it, recurse to the source ASDL. Steps 1-10 tell you WHERE to look. Step 11 tells you WHAT to put there. When the ASDL is correct, every leaf is a natural LuaFun chain and every phase transition is obvious. When it's not, the leaf resistance is the signal — and it arrives in 10 lines, not 500. The ASDL is the architecture. The leaves are the proof.
+The hard part is steps 1-10. Step 11 is where the leaves either confirm the design is right or send you back to fix it. The direction is bottom-up: write the leaf you want to write, discover what it needs, modify each layer above to provide it, recurse to the source ASDL. Steps 1-10 tell you WHERE to look. Step 11 tells you WHAT to put there. When the ASDL is correct, every leaf is a natural pure structural transform and every phase transition is obvious. When it's not, the leaf resistance is the signal — and it arrives in 10 lines, not 500. The ASDL is the architecture. The leaves are the proof.
+
+---
+
+## Final statement
+
+```
+THE USER
+    edits a domain program
+
+THE SOURCE OF TRUTH
+    source ASDL
+
+THE INPUT LANGUAGE
+    Event ASDL
+
+STATE EVOLUTION
+    Apply : (state, event) → state
+
+THE TWO LEVELS
+    compilation level decides; execution level runs
+
+THE PURE ARCHITECTURE
+    memoized transitions and terminals
+
+THE COMPILE PRODUCT
+    Unit { behavior, state ownership }
+
+THE LIVE SYSTEM
+    poll → apply → compile → execute
+
+THE BACKEND STORY
+    LuaJIT by default
+    Terra by opt-in
+
+THE TERRA INSIGHT
+    explicit types and staging are not just backend power
+    they are design pressure
+
+THE DEEPEST RULE
+    the source ASDL is the architecture
+```
+
+> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software, and Terra is one especially powerful way to realize it when explicit native control is worth the cost.

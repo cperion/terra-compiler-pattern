@@ -125,13 +125,19 @@ local function test_resolve_type_name_and_direct_refs()
         ["Foo.Child"] = FooChild,
         ["Bar.Expr"] = BarExpr,
     }
+    local basename_map = {
+        Child = "Foo.Child",
+    }
+    local basename_ambiguous = {
+        Expr = true,
+    }
 
-    assert(H.resolve_type_name(type_map, "Foo.Child", "Foo") == "Foo.Child")
-    assert(H.resolve_type_name(type_map, "Child", "Foo") == "Foo.Child")
-    assert(H.resolve_type_name(type_map, "Expr", nil) == nil)
+    assert(H.resolve_type_name(type_map, basename_map, basename_ambiguous, "Foo.Child", "Foo") == "Foo.Child")
+    assert(H.resolve_type_name(type_map, basename_map, basename_ambiguous, "Child", "Foo") == "Foo.Child")
+    assert(H.resolve_type_name(type_map, basename_map, basename_ambiguous, "Expr", nil) == nil)
 
     local refs = H.direct_refs(type_map, function(type_name, phase_name)
-        return H.resolve_type_name(type_map, type_name, phase_name)
+        return H.resolve_type_name(type_map, basename_map, basename_ambiguous, type_name, phase_name)
     end, FooNode)
 
     assert(#refs == 2)
@@ -222,8 +228,12 @@ local function test_render_helpers()
         ["Demo.Add"] = DemoAdd,
         ["Demo.Node"] = DemoNode,
     }
+    local basename_map = {
+        Expr = "Demo.Expr",
+    }
+    local basename_ambiguous = {}
     local graph = H.render_type_graph(type_map, function(type_name, phase_name)
-        return H.resolve_type_name(type_map, type_name, phase_name)
+        return H.resolve_type_name(type_map, basename_map, basename_ambiguous, type_name, phase_name)
     end, "Demo.Node", 3)
     assert(graph:match("### Demo%.Node"))
     assert(graph:match("### Demo%.Expr %([0-9]+ variants%)"))
@@ -243,7 +253,7 @@ local function test_render_helpers()
 
     local record_lines = { "function Node:lower()" }
     local record_calls = H.collect_record_scaffold_calls(type_map, function(type_name, phase_name)
-        return H.resolve_type_name(type_map, type_name, phase_name)
+        return H.resolve_type_name(type_map, basename_map, basename_ambiguous, type_name, phase_name)
     end, DemoNode, "lower")
     H.append_record_scaffold(record_lines, "lower", record_calls)
     local record_scaffold = table.concat(record_lines, "\n")

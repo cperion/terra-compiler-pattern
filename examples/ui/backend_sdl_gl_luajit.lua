@@ -272,7 +272,18 @@ function Backend.ensure_rgba_texture(key, width, height, pixels, sampling)
     local GL = Backend.GL
     local tex = ffi.new("GLuint[1]", 0)
     local minmag = (sampling == "Nearest") and C.GL_NEAREST or C.GL_LINEAR
-    local buffer = ffi.new("uint8_t[?]", #pixels, pixels)
+    local byte_count = #pixels
+    local buffer = ffi.new("uint8_t[?]", byte_count)
+
+    if type(pixels) == "string" then
+        ffi.copy(buffer, pixels, byte_count)
+    elseif type(pixels) == "cdata" then
+        ffi.copy(buffer, pixels, byte_count)
+    else
+        for i = 1, byte_count do
+            buffer[i - 1] = pixels[i]
+        end
+    end
 
     GL.glGenTextures(1, tex)
     GL.glBindTexture(C.GL_TEXTURE_2D, tex[0])

@@ -32,7 +32,66 @@ assert(stats.misses == 1)
 assert(U.memo_report():match("MEMOIZE REPORT"))
 assert(U.memo_quality():match("DESIGN QUALITY"))
 
-local I = U.inspect_from("examples/inspect/spec_demo.t")
+local terra incr(x : int32)
+    return x + 1
+end
+
+struct TerraSmokeState { total : int32 }
+local terra accum(x : int32, state : &TerraSmokeState)
+    state.total = state.total + x
+    return state.total
+end
+
+local stateless = U.leaf(nil, incr)
+assert(stateless.fn(4) == 5)
+
+local stateful = U.leaf(TerraSmokeState, accum)
+local state = terralib.new(TerraSmokeState)
+assert(stateful.fn(3, state) == 3)
+assert(stateful.fn(5, state) == 8)
+
+local x = symbol(int32, "x")
+local quoted = U.leaf_quote(nil, terralib.newlist({ x }), function(_, params)
+    return quote
+        return [params[1]] * 2
+    end
+end)
+assert(quoted.fn(6) == 12)
+
+struct IntBox { value : int32 }
+
+local terra inc_ptr(p : &IntBox)
+    p.value = p.value + 1
+end
+local terra dbl_ptr(p : &IntBox)
+    p.value = p.value * 2
+end
+local inc_unit = U.leaf(nil, inc_ptr)
+local dbl_unit = U.leaf(nil, dbl_ptr)
+
+local terra composed_direct(p : &IntBox)
+    inc_ptr(p)
+    dbl_ptr(p)
+end
+local packaged = U.compose({ inc_unit, dbl_unit }, composed_direct)
+local packed_value = terralib.new(IntBox)
+packed_value.value = 7
+packaged.fn(packed_value)
+assert(packed_value.value == 16)
+
+local qp = symbol(&IntBox, "p")
+local quoted_compose = U.compose_quote({ inc_unit, dbl_unit }, terralib.newlist({ qp }), function(_, kids, params)
+    return quote
+        [kids[1].call(params[1])]
+        [kids[2].call(params[1])]
+    end
+end)
+local quoted_value = terralib.new(IntBox)
+quoted_value.value = 7
+quoted_compose.fn(quoted_value)
+assert(quoted_value.value == 16)
+
+local I = U.inspect_from("examples/inspect/demo_project")
 assert(I.progress().type_total == 4)
 assert(I.progress().boundary_total == 2)
 assert(I.find_boundary("Demo.Expr:lower") ~= nil)

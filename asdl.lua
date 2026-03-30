@@ -778,7 +778,6 @@ local INTERNAL_IR = build_internal_ir()
 -- ═══════════════════════════════════════════════════════════════
 
 local compiler = {}
-local F = U.fun
 
 -- Compiler responsibility:
 --   text -> Source ASDL -> Resolved ASDL -> LuaJIT layout ASDL -> lowered leaf plan
@@ -786,10 +785,7 @@ local F = U.fun
 -- Small pure helpers used throughout the compiler stages.
 -- L: normalize iterable -> plain array.
 local function L(xs)
-    return U.fold(xs or {}, function(acc, x)
-        acc[#acc + 1] = x
-        return acc
-    end, {})
+    return U.copy(xs or {})
 end
 
 -- S: normalize string-like cdata -> Lua string.
@@ -988,7 +984,7 @@ end)
 
 local function collect_type_fqnames(definitions, prefix, index)
     index = index or {}
-    return F.iter(definitions):reduce(function(acc, definition)
+    return U.fold(definitions, function(acc, definition)
         return U.match(definition, {
             SourceModuleDef = function(v)
                 local next_prefix = prefix == "" and S(v.name) or (prefix .. "." .. S(v.name))
@@ -1035,7 +1031,7 @@ local function resolve_type_ref(index, ns_parts, type_ref)
         end,
 
         NamedTypeRef = function(v)
-            local parts = U.map(v.parts, function(part) return part end)
+            local parts = U.copy(v.parts)
             return R.ResolvedDefinedTypeRef(resolve_fqname(index, ns_parts, parts))
         end,
     })
@@ -1043,13 +1039,13 @@ end
 
 local function resolve_fields(index, ns_parts, fields)
     local R = T().Resolved
-    return L(F.iter(fields):map(function(field)
+    return U.map(fields, function(field)
         return R.Field(
             resolve_type_ref(index, ns_parts, field.type_ref),
             resolved_arity(field.arity),
             S(field.name)
         )
-    end):totable())
+    end)
 end
 
 local function resolve_type_expr(index, ns_parts, type_expr)
@@ -1066,7 +1062,7 @@ local function resolve_type_expr(index, ns_parts, type_expr)
 
         SourceSum = function(v)
             return R.ResolvedSum(
-                L(F.iter(v.constructors):map(function(ctor)
+                U.map(v.constructors, function(ctor)
                     local fqname = module_prefix == "" and S(ctor.name) or (module_prefix .. "." .. S(ctor.name))
                     return R.Constructor(
                         fqname,
@@ -1074,7 +1070,7 @@ local function resolve_type_expr(index, ns_parts, type_expr)
                         resolve_fields(index, ns_parts, ctor.fields),
                         ctor.unique_flag
                     )
-                end):totable()),
+                end),
                 resolve_fields(index, ns_parts, v.attribute_fields)
             )
         end,
@@ -1083,10 +1079,10 @@ end
 
 local function resolve_definitions(index, ns_parts, definitions)
     local R = T().Resolved
-    return L(F.iter(definitions):map(function(definition)
+    return U.map(definitions, function(definition)
         return U.match(definition, {
             SourceModuleDef = function(v)
-                local next_parts = F.iter(ns_parts):map(function(part) return part end):totable()
+                local next_parts = U.copy(ns_parts)
                 next_parts[#next_parts + 1] = S(v.name)
                 local fqname = join_parts(next_parts)
                 return R.ResolvedModuleDef(
@@ -1096,7 +1092,7 @@ local function resolve_definitions(index, ns_parts, definitions)
             end,
 
             SourceTypeDef = function(v)
-                local next_parts = F.iter(ns_parts):map(function(part) return part end):totable()
+                local next_parts = U.copy(ns_parts)
                 local fqname = (#next_parts == 0) and S(v.name) or (join_parts(next_parts) .. "." .. S(v.name))
                 return R.ResolvedTypeDef(
                     fqname,
@@ -1104,7 +1100,7 @@ local function resolve_definitions(index, ns_parts, definitions)
                 )
             end,
         })
-    end):totable())
+    end)
 end
 
 -- Stage 2: Asdl.Source.Spec -> Asdl.Resolved.Spec
@@ -1169,10 +1165,10 @@ end
 
 local function lower_slots(fields, prefix)
     local LJ = T().LuaJit
-    return L(F.iter(fields):map(function(field)
+    return U.map(fields, function(field)
         local slot_type, optional_flag = lower_slot_type(field.type_ref, field.arity, prefix)
         return LJ.Slot(S(field.name), source_type_name(field.type_ref), slot_type, optional_flag)
-    end):totable())
+    end)
 end
 
 local function lower_type_layouts(definitions, prefix)
@@ -1198,25 +1194,25 @@ local function lower_type_layouts(definitions, prefix)
                     end,
 
                     ResolvedSum = function(x)
-                        local variants = F.iter(x.constructors)
-                            :enumerate()
-                            :map(function(i, ctor)
-                                return LJ.VariantLayout(
-                                    S(ctor.fqname),
-                                    S(ctor.kind_name),
-                                    i,
-                                    ctype_name_for(S(ctor.fqname), prefix),
-                                    lower_slots(ctor.fields, prefix),
-                                    ctor.unique_flag
-                                )
-                            end)
-                            :totable()
+                        local variants = {}
+                        local i = 0
+                        U.each(x.constructors, function(ctor)
+                            i = i + 1
+                            variants[i] = LJ.VariantLayout(
+                                S(ctor.fqname),
+                                S(ctor.kind_name),
+                                i,
+                                ctype_name_for(S(ctor.fqname), prefix),
+                                lower_slots(ctor.fields, prefix),
+                                ctor.unique_flag
+                            )
+                        end)
 
                         return {
                             LJ.SumLayout(
                                 S(v.fqname),
                                 "uint8_t",
-                                L(variants)
+                                variants
                             )
                         }
                     end,
@@ -1225,11 +1221,11 @@ local function lower_type_layouts(definitions, prefix)
         })
     end
 
-    return F.iter(definitions):reduce(function(acc, definition)
-        return F.iter(lower_definition(definition)):reduce(function(inner, layout)
-            inner[#inner + 1] = layout
-            return inner
-        end, acc)
+    return U.fold(definitions, function(acc, definition)
+        U.each(lower_definition(definition), function(layout)
+            acc[#acc + 1] = layout
+        end)
+        return acc
     end, {})
 end
 
@@ -1301,7 +1297,7 @@ local function emit_field(slot)
 end
 
 local function emit_record_cdef(ctype_name, slots)
-    local acc = F.iter(slots):reduce(function(state, slot)
+    local acc = U.fold(slots, function(state, slot)
         return U.match(slot.slot_type, {
             ScalarSlotType = function(v)
                 local line = slot.optional_flag
@@ -1343,14 +1339,14 @@ compiler.emit_luajit = U.transition("asdl_asdl.emit_luajit", function(layout_spe
         return acc
     end
 
-    return F.iter(layout_spec.types):reduce(function(acc, layout)
+    return U.fold(layout_spec.types, function(acc, layout)
         return U.match(layout, {
             ProductLayout = function(v)
                 local record = {
                     kind = "record",
                     fqname = S(v.fqname),
                     ctype_name = S(v.ctype_name),
-                    fields = F.iter(v.slots):map(emit_field):totable(),
+                    fields = U.map(v.slots, emit_field),
                     unique = v.unique_flag,
                     kind_name = nil,
                     sum_parent = nil,
@@ -1359,12 +1355,12 @@ compiler.emit_luajit = U.transition("asdl_asdl.emit_luajit", function(layout_spe
             end,
 
             SumLayout = function(v)
-                local variant_entries = F.iter(v.variants):map(function(variant)
+                local variant_entries = U.map(v.variants, function(variant)
                     local record = {
                         kind = "record",
                         fqname = S(variant.fqname),
                         ctype_name = S(variant.ctype_name),
-                        fields = F.iter(variant.slots):map(emit_field):totable(),
+                        fields = U.map(variant.slots, emit_field),
                         unique = variant.unique_flag,
                         kind_name = S(variant.kind_name),
                         sum_parent = S(v.fqname),
@@ -1373,11 +1369,11 @@ compiler.emit_luajit = U.transition("asdl_asdl.emit_luajit", function(layout_spe
                         record = record,
                         cdef = emit_record_cdef(S(variant.ctype_name), variant.slots),
                     }
-                end):totable()
+                end)
 
-                local variants = F.iter(variant_entries):map(function(entry)
+                local variants = U.map(variant_entries, function(entry)
                     return entry.record
-                end):totable()
+                end)
 
                 acc.definitions[S(v.fqname)] = {
                     kind = "sum",
@@ -1385,7 +1381,7 @@ compiler.emit_luajit = U.transition("asdl_asdl.emit_luajit", function(layout_spe
                     variants = variants,
                 }
 
-                return F.iter(variant_entries):reduce(function(inner, entry)
+                return U.fold(variant_entries, function(inner, entry)
                     inner.records[#inner.records + 1] = entry.record
                     inner.cdefs[#inner.cdefs + 1] = entry.cdef
                     inner.definitions[entry.record.fqname] = entry.record

@@ -194,18 +194,28 @@ local function compose_children(children)
     return kids
 end
 
-function U.compose(children, body)
+function U.compose(children, fn)
+    children = children or {}
+    if type(fn) ~= "function" then
+        error("U.compose: fn must be a function", 2)
+    end
+
+    local unit = U.new(fn, U.state_compose(children))
+    unit.children = children
+    return unit
+end
+
+function U.compose_closure(children, body)
     children = children or {}
     if type(body) ~= "function" then
-        error("U.compose: body must be a function", 2)
+        error("U.compose_closure: body must be a function", 2)
     end
 
     local kids = compose_children(children)
-    local unit = U.new(function(state, ...)
+    local unit = U.compose(children, function(state, ...)
         return body(state, kids, ...)
-    end, U.state_compose(children))
+    end)
 
-    unit.children = children
     unit.__composed_kids = kids
     return unit
 end

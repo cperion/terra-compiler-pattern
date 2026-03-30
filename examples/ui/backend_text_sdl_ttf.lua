@@ -16,7 +16,7 @@ local utf8 = rawget(_G, "utf8")
 local Text = {}
 
 if not rawget(_G, "__terra_ui_text_ffi_cdef") then
-    ffi.cdef [[
+    local ok = pcall(ffi.cdef, [[
         typedef unsigned long size_t;
         typedef uint8_t Uint8;
         typedef uint32_t Uint32;
@@ -69,7 +69,43 @@ if not rawget(_G, "__terra_ui_text_ffi_cdef") then
         void SDL_DestroySurface(SDL_Surface *surface);
         bool SDL_LockSurface(SDL_Surface *surface);
         void SDL_UnlockSurface(SDL_Surface *surface);
-    ]]
+    ]])
+    if not ok then
+        pcall(ffi.cdef, [[
+            typedef unsigned long size_t;
+            typedef uint8_t Uint8;
+            typedef uint32_t Uint32;
+            typedef uint32_t SDL_PixelFormat;
+            typedef struct TTF_Font TTF_Font;
+            typedef struct SDL_Color {
+                Uint8 r;
+                Uint8 g;
+                Uint8 b;
+                Uint8 a;
+            } SDL_Color;
+            bool TTF_Init(void);
+            void TTF_Quit(void);
+            TTF_Font *TTF_OpenFont(const char *file, float ptsize);
+            void TTF_CloseFont(TTF_Font *font);
+            int TTF_GetFontHeight(const TTF_Font *font);
+            int TTF_GetFontAscent(const TTF_Font *font);
+            int TTF_GetFontDescent(const TTF_Font *font);
+            bool TTF_GetGlyphMetrics(TTF_Font *font, Uint32 ch, int *minx, int *maxx, int *miny, int *maxy, int *advance);
+            bool TTF_GetGlyphKerning(TTF_Font *font, Uint32 previous_ch, Uint32 ch, int *kerning);
+            bool TTF_GetStringSize(TTF_Font *font, const char *text, size_t length, int *w, int *h);
+            bool TTF_GetStringSizeWrapped(TTF_Font *font, const char *text, size_t length, int wrap_width, int *w, int *h);
+            typedef int TTF_HorizontalAlignment;
+            SDL_Surface *TTF_RenderGlyph_Blended(TTF_Font *font, Uint32 ch, SDL_Color fg);
+            SDL_Surface *TTF_RenderText_Blended(TTF_Font *font, const char *text, size_t length, SDL_Color fg);
+            SDL_Surface *TTF_RenderText_Blended_Wrapped(TTF_Font *font, const char *text, size_t length, SDL_Color fg, int wrap_width);
+            void TTF_SetFontWrapAlignment(TTF_Font *font, TTF_HorizontalAlignment align);
+            const char *SDL_GetError(void);
+            SDL_Surface *SDL_ConvertSurface(SDL_Surface *surface, SDL_PixelFormat format);
+            void SDL_DestroySurface(SDL_Surface *surface);
+            bool SDL_LockSurface(SDL_Surface *surface);
+            void SDL_UnlockSurface(SDL_Surface *surface);
+        ]])
+    end
     _G.__terra_ui_text_ffi_cdef = true
 end
 
@@ -277,8 +313,16 @@ function Text.lookup_atlas(atlas_ref)
     return unpack_atlas_id(atlas_ref)
 end
 
+local function normalize_text_value(text_value)
+    local raw = text_value and text_value.value or ""
+    if type(raw) == "cdata" then
+        return ffi.string(raw)
+    end
+    return raw
+end
+
 function Text.measure(runtime, font_path, text_value, text_style, text_layout, max_width)
-    local text = text_value and text_value.value or ""
+    local text = normalize_text_value(text_value)
     local size_px = text_style and text_style.size_px or 16
     local font = Text.load_font(runtime, font_path, size_px)
 

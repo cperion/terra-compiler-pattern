@@ -52,8 +52,10 @@ These are pure helper/boundary concepts and should be backend-independent:
 These depend on Terra semantics and should stay in the Terra backend:
 
 - `U.new(fn, state_t)` Terra ABI validation
-- `U.leaf(state_t, params, body)` Terra quote construction
-- `U.compose(children, params, body)` Terra struct synthesis
+- `U.leaf(state_t, fn)` normalized Unit packaging across backends
+- `U.leaf_quote(state_t, params, body)` Terra quote construction
+- `U.compose(children, fn)` normalized composed Unit packaging
+- `U.compose_quote(children, params, body)` Terra struct/code synthesis
 - `U.hot_slot(fn_type)` Terra globals + pointer swap
 - `U.app(config)` if it continues to depend on Terra callback pointers
 
@@ -67,7 +69,8 @@ These depend on LuaJIT runtime semantics:
 - `U.state_compose`
 - `U.new(fn, state_t)` callable/layout validation
 - `U.leaf(state_t, fn)` closure leaf construction
-- `U.compose(children, body)` closure/state-table composition
+- `U.compose(children, fn)` normalized composed Unit packaging
+- `U.compose_closure(children, body)` closure/state composition
 - `U.hot_slot()` runtime callback swap
 - `U.app(config)` Lua callback hookup
 

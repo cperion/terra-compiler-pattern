@@ -1,0 +1,8 @@
+module Demo {
+    Expr = Add(number x)
+         | Mul(number y)
+
+    Node = (
+        Expr expr
+    ) unique
+}

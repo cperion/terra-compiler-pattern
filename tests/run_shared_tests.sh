@@ -11,6 +11,7 @@ run() {
 
 run luajit tests/unit_core_test.lua
 run luajit tests/unit_inspect_core_test.lua
+run luajit tests/unit_schema_project_test.lua
 run luajit tests/unit_luajit_smoke.lua
 run terra tests/unit_shared_terra_smoke.t
 

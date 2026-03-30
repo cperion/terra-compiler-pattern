@@ -45,7 +45,7 @@ local compile_gain = U.terminal(function(node)
     local params = audio_params()
     local buf, n = params[1], params[2]
 
-    return U.leaf(nil, params, function(_, _)
+    return U.leaf_quote(nil, params, function(_, _)
         return quote
             for i = 0, [n] do
                 buf[i] = buf[i] * [float](g)
@@ -59,7 +59,7 @@ local compile_biquad = U.terminal(function(node, sr)
     local params = audio_params()
     local buf, n = params[1], params[2]
 
-    local unit = U.leaf(BenchBiquadState, params, function(state, _)
+    local unit = U.leaf_quote(BenchBiquadState, params, function(state, _)
         return quote
             var x1 = state.x1
             var x2 = state.x2
@@ -104,7 +104,7 @@ local compile_chain = U.terminal(function(nodes, sr)
     local params = audio_params()
     local buf, n = params[1], params[2]
 
-    return U.compose(units, params, function(_, kids, _)
+    return U.compose_quote(units, params, function(_, kids, _)
         local stmts = terralib.newlist()
         for _, kid in ipairs(kids) do
             stmts:insert(kid.call(buf, n))

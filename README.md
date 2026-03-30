@@ -19,6 +19,7 @@ Current backend policy:
 The detailed design docs remain the source of truth:
 
 - `modeling-programs-as-compilers.md`
+- `docs/unit-api.md`
 - `terra-compiler-pattern.md`
 - `unit.t`
 - `AGENTS.md`
@@ -27,6 +28,7 @@ Additional backend notes:
 
 - `docs/luajit-backend.md`
 - `docs/luajit-leaf-rules.md`
+- `docs/gen-param-state-machine.md`
 - `docs/unit-shared-core-refactor-plan.md`
 - `docs/backend-benchmarks.md`
 
@@ -40,7 +42,7 @@ The runtime vocabulary is now split into small layers.
 
 Backend-independent helpers:
 
-- LuaFun traversal helpers
+- canonical `gen / param / state` traversal helpers
 - pure memoize wrapper shape
 - `with_fallback`
 - `with_errors`
@@ -92,9 +94,85 @@ Owns LuaJIT-specific behavior:
 - FFI/cdata state layouts for production leaves
 - LuaJIT hot-slot swapping
 - Lua callback application loop
-- shared schema/spec/inspect support through `unit.lua`
+- shared project/schema/inspect support through `unit.lua`
+
+## Project conventions
+
+`unit` now supports convention-first project loading.
+
+Preferred project shape:
+
+```text
+myproj/
+  schema/
+    app.asdl
+  pipeline.lua
+  unit_project.lua   # optional, also used for deps/imports
+  boundaries/
+    ui_bound_document.lua
+    ui_bound_document_test.lua
+    ui_bound_document_bench.lua
+    ui_bound_document_profile.lua
+```
+
+Default layout is **flat**. Optional tree layout is enabled with `unit_project.lua`:
+
+```lua
+return {
+    layout = "tree",
+}
+```
+
+Flat type paths use a single underscore separator and lower-snake casing:
+
+- `UiBound.Document` -> `boundaries/ui_bound_document.lua`
+- `UiBound.Document` test -> `boundaries/ui_bound_document_test.lua`
+
+Canonical semantic artifact kinds per receiver type:
+
+- `impl`
+- `test`
+- `bench`
+- `profile`
+
+Canonical backend artifact examples:
+
+- `ui_machine_render_gen_luajit.lua`
+- `ui_machine_render_gen_terra.t`
+- `ui_machine_render_gen_luajit_bench.lua`
+- `ui_machine_render_gen_terra_bench.t`
+
+Useful CLI commands:
+
+```bash
+terra unit.t init myproj --layout flat
+terra unit.t status myproj
+terra unit.t path myproj UiBound.Document
+terra unit.t backends myproj
+terra unit.t backend-path myproj UiMachine.RenderGen terra bench
+terra unit.t scaffold-file myproj UiBound.Document
+terra unit.t scaffold-project myproj --all-artifacts
+```
+
+Legacy `U.spec { ... }` support has been removed. Use project directories or direct `.asdl` schema files.
+
+Projects may also declare dependencies in `unit_project.lua`:
+
+```lua
+return {
+    deps = {
+        "../ui3",
+    },
+}
+```
+
+`unit` loads dependency schemas first and then installs dependency backend artifacts for the active backend automatically.
 
 ## Examples
+
+Convention-first inspect example:
+
+- `examples/inspect/demo_project`
 
 LuaJIT examples live in:
 
@@ -158,4 +236,4 @@ Direct scripts:
 - LuaJIT synth example
 - LuaJIT biquad example
 - LuaJIT app loop example
-- Terra inspect/status/scaffold smoke checks
+- Terra inspect/status/scaffold smoke checks for the convention-first project loader

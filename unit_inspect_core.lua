@@ -69,16 +69,10 @@ function M.new(U)
 
         U.each(U.each_name({ namespaces }), function(name)
             local ns = namespaces[name]
-            if type(ns) == "table" then
-                local found = false
-                U.each(U.each_name({ ns }), function(member_name)
-                    if not found and H.is_asdl_class(ns[member_name]) then
-                        found = true
-                    end
-                end)
-                if found then
-                    phases[#phases + 1] = name
-                end
+            if type(ns) == "table" and U.any(U.each_name({ ns }), function(member_name)
+                return H.is_asdl_class(ns[member_name])
+            end) then
+                phases[#phases + 1] = name
             end
         end)
 
@@ -87,9 +81,9 @@ function M.new(U)
 
     function H.sorted_class_names(ns)
         local names = {}
-        U.each(U.each_name({ ns }), function(name)
+        U.filter_map_into(names, U.each_name({ ns }), function(name)
             if H.is_asdl_class(ns[name]) then
-                names[#names + 1] = name
+                return name
             end
         end)
         return names
@@ -113,16 +107,12 @@ function M.new(U)
     end
 
     function H.find_boundary(boundaries, boundary_name)
-        local match = nil
-        U.each(boundaries, function(b)
-            if b.receiver .. ":" .. b.name == boundary_name then
-                match = b
-            end
+        return U.find(boundaries, function(b)
+            return b.receiver .. ":" .. b.name == boundary_name
         end)
-        return match
     end
 
-    function H.resolve_type_name(type_map, type_name, phase_name)
+    function H.resolve_type_name(type_map, basename_map, basename_ambiguous, type_name, phase_name)
         if type(type_name) ~= "string" then return nil end
 
         if type_map[type_name] then
@@ -136,19 +126,11 @@ function M.new(U)
             end
         end
 
-        local match = nil
-        U.each(U.each_name({ type_map }), function(fqname)
-            if H.basename(fqname) == type_name then
-                if match and match ~= fqname then
-                    match = false
-                    return
-                end
-                match = fqname
-            end
-        end)
+        if basename_ambiguous and basename_ambiguous[type_name] then
+            return nil
+        end
 
-        if match == false then return nil end
-        return match
+        return basename_map and basename_map[type_name] or nil
     end
 
     function H.direct_refs(type_map, resolve_type_name, t)
@@ -182,7 +164,12 @@ function M.new(U)
         max_depth = max_depth or 3
 
         local visited = {}
-        local sections = {}
+        local out = {}
+        local first = true
+
+        local function add(line)
+            out[#out + 1] = line
+        end
 
         local function walk(type_name, depth)
             if visited[type_name] then return end
@@ -193,27 +180,27 @@ function M.new(U)
 
             visited[type_name] = true
 
+            if not first then add("") end
+            first = false
+
             local indent = string.rep("  ", depth)
-            local lines = {}
             local title = indent .. "### " .. t.fqname
             if t.kind == "enum" then
                 title = title .. " (" .. #t.variants .. " variants)"
             end
-            lines[#lines + 1] = title
+            add(title)
 
             if t.kind == "enum" then
                 U.each(t.variants, function(vname)
-                    lines[#lines + 1] = indent .. "| " .. vname
+                    add(indent .. "| " .. vname)
                 end)
             end
 
             U.each(t.fields or {}, function(field)
-                lines[#lines + 1] = indent .. "- "
+                add(indent .. "- "
                     .. tostring(field.name or field[1] or "?")
-                    .. ": " .. H.field_type_string(field)
+                    .. ": " .. H.field_type_string(field))
             end)
-
-            sections[#sections + 1] = table.concat(lines, "\n")
 
             if depth >= max_depth then return end
 
@@ -235,7 +222,7 @@ function M.new(U)
         end
 
         walk(root_name, 0)
-        return table.concat(sections, "\n\n")
+        return table.concat(out, "\n")
     end
 
     function H.collect_prompt_child_items(boundaries, direct_refs, boundary)
@@ -275,8 +262,8 @@ function M.new(U)
         if #child_items == 0 then
             sections[#sections + 1] = "- none"
         else
-            U.each(child_items, function(item)
-                sections[#sections + 1] = "- " .. item
+            U.map_into(sections, child_items, function(item)
+                return "- " .. item
             end)
         end
 
@@ -287,11 +274,11 @@ function M.new(U)
 
     function H.collect_record_scaffold_calls(type_map, resolve_type_name, t, boundary_name)
         local child_calls = {}
-        U.each(t.fields or {}, function(field)
+        U.filter_map_into(child_calls, t.fields or {}, function(field)
             local ref = resolve_type_name(field.type, t.phase)
             local ref_t = ref and type_map[ref] or nil
             if ref_t and type(ref_t.class[boundary_name]) == "function" then
-                child_calls[#child_calls + 1] = {
+                return {
                     field = field,
                     ref = ref_t,
                 }
@@ -350,26 +337,20 @@ function M.new(U)
         lines[#lines + 1] = ""
     end
 
-    function H.append_phase_markdown(lines, phase_name, types, boundaries)
+    function H.append_phase_markdown(lines, phase_name, phase_types, phase_boundaries)
         lines[#lines + 1] = "## Phase: " .. phase_name
         lines[#lines + 1] = ""
 
-        U.each(types, function(t)
-            if t.phase == phase_name then
-                H.append_type_markdown(lines, t)
-            end
+        U.each(phase_types or {}, function(t)
+            H.append_type_markdown(lines, t)
         end)
 
-        local have_boundaries = false
-        U.each(boundaries, function(b)
-            if b.phase == phase_name then
-                if not have_boundaries then
-                    lines[#lines + 1] = "### Boundaries"
-                    have_boundaries = true
-                end
+        if phase_boundaries and #phase_boundaries > 0 then
+            lines[#lines + 1] = "### Boundaries"
+            U.each(phase_boundaries, function(b)
                 lines[#lines + 1] = "- `" .. b.receiver .. ":" .. b.name .. "()`"
-            end
-        end)
+            end)
+        end
 
         lines[#lines + 1] = ""
     end
@@ -445,6 +426,381 @@ function M.new(U)
     end
 
     return H
+end
+
+function M.build(U, ctx, phases, pipeline_phases)
+    local H = M.new(U)
+
+    phases = phases or H.discover_phases(ctx)
+    if #phases == 0 then phases = H.discover_phases(ctx) end
+    pipeline_phases = pipeline_phases or phases
+
+    local I = {
+        ctx = ctx,
+        phases = phases,
+        pipeline_phases = pipeline_phases,
+        types = {},
+        types_by_phase = {},
+        type_map = {},
+        basename_map = {},
+        basename_ambiguous = {},
+        boundaries = {},
+        boundaries_by_phase = {},
+        boundary_counts_by_phase = {},
+        phase_primary_verbs = {},
+    }
+
+    local class_map = {}
+
+    U.each(phases, function(phase_name)
+        local ns = ctx[phase_name]
+        if type(ns) == "table" then
+            local phase_types = I.types_by_phase[phase_name]
+            if not phase_types then
+                phase_types = {}
+                I.types_by_phase[phase_name] = phase_types
+            end
+
+            U.each(H.sorted_class_names(ns), function(name)
+                local class = ns[name]
+                local fqname = phase_name .. "." .. name
+                local t = {
+                    phase = phase_name,
+                    name = name,
+                    fqname = fqname,
+                    class = class,
+                    kind = "record",
+                    fields = class.__fields or {},
+                    variants = {},
+                    variant_types = {},
+                    methods = {},
+                }
+                I.types[#I.types + 1] = t
+                phase_types[#phase_types + 1] = t
+                I.type_map[fqname] = t
+                class_map[class] = t
+                class.__name = class.__name or fqname
+
+                if not I.basename_ambiguous[name] then
+                    local existing = I.basename_map[name]
+                    if existing and existing ~= fqname then
+                        I.basename_map[name] = nil
+                        I.basename_ambiguous[name] = true
+                    else
+                        I.basename_map[name] = fqname
+                    end
+                end
+            end)
+        end
+    end)
+
+    U.each(I.types, function(t)
+        local variant_entries = {}
+        if type(t.class.members) == "table" then
+            U.filter_map_into(variant_entries, t.class.members, function(member)
+                if member ~= t.class then
+                    local variant_t = class_map[member]
+                    return {
+                        class = member,
+                        type = variant_t,
+                        name = (variant_t and variant_t.name)
+                            or member.kind
+                            or H.basename(member.__name)
+                            or tostring(member),
+                    }
+                end
+            end)
+        end
+
+        table.sort(variant_entries, function(a, b)
+            return a.name < b.name
+        end)
+
+        if #variant_entries > 0 and not t.class.__fields then
+            t.kind = "enum"
+            U.each(variant_entries, function(entry)
+                local i = #t.variants + 1
+                t.variants[i] = entry.name
+                t.variant_types[i] = entry.type
+                entry.class.__sum_parent = t.class
+            end)
+            t.class.__variants = t.variants
+        end
+    end)
+
+    U.each(I.types, function(t)
+        local method_names = {}
+        local parent = t.class.__sum_parent
+        U.filter_map_into(method_names, U.each_name({ t.class }), function(name)
+            local fn = t.class[name]
+            if H.is_public_method(name, fn)
+                and not (parent and parent[name] == fn) then
+                return name
+            end
+        end)
+        t.methods = method_names
+
+        local phase_boundaries = I.boundaries_by_phase[t.phase]
+        if not phase_boundaries then
+            phase_boundaries = {}
+            I.boundaries_by_phase[t.phase] = phase_boundaries
+        end
+
+        local phase_counts = I.boundary_counts_by_phase[t.phase]
+        if not phase_counts then
+            phase_counts = {}
+            I.boundary_counts_by_phase[t.phase] = phase_counts
+        end
+
+        U.each(method_names, function(name)
+            local boundary = {
+                receiver = t.fqname,
+                receiver_name = t.name,
+                name = name,
+                fn = t.class[name],
+                phase = t.phase,
+                type = t,
+            }
+            I.boundaries[#I.boundaries + 1] = boundary
+            phase_boundaries[#phase_boundaries + 1] = boundary
+            phase_counts[name] = (phase_counts[name] or 0) + 1
+        end)
+    end)
+
+    H.sort_boundaries(I.boundaries)
+    U.each(phases, function(phase_name)
+        local phase_boundaries = I.boundaries_by_phase[phase_name]
+        if phase_boundaries then
+            H.sort_boundaries(phase_boundaries)
+        end
+
+        local counts = I.boundary_counts_by_phase[phase_name] or {}
+        local primary = { verb = "?", count = 0 }
+        U.each(U.each_name({ counts }), function(name)
+            local count = counts[name]
+            if count > primary.count then
+                primary.verb = name
+                primary.count = count
+            end
+        end)
+        I.phase_primary_verbs[phase_name] = primary
+    end)
+
+    local function resolve_type_name(type_name, phase_name)
+        return H.resolve_type_name(
+            I.type_map,
+            I.basename_map,
+            I.basename_ambiguous,
+            type_name,
+            phase_name)
+    end
+
+    local function direct_refs(t)
+        return H.direct_refs(I.type_map, function(type_name, phase_name)
+            return resolve_type_name(type_name, phase_name)
+        end, t)
+    end
+
+    function I.find_boundary(boundary_name)
+        return H.find_boundary(I.boundaries, boundary_name)
+    end
+
+    function I.resolve_type_name(type_name, phase_name)
+        return resolve_type_name(type_name, phase_name)
+    end
+
+    function I.is_stub(boundary)
+        return H.is_stub(boundary)
+    end
+
+    function I.progress()
+        local info = {
+            boundary_total = #I.boundaries,
+            boundary_real = 0,
+            boundary_stub = 0,
+            boundary_coverage = 0,
+            type_total = #I.types,
+            record_total = 0,
+            enum_total = 0,
+            variant_total = 0,
+            by_phase = {},
+        }
+
+        U.each(phases, function(phase_name)
+            info.by_phase[phase_name] = H.new_phase_bucket()
+        end)
+
+        U.each(I.types, function(t)
+            local phase = H.ensure_phase_bucket(info.by_phase, t.phase)
+
+            phase.type_total = phase.type_total + 1
+            if t.kind == "enum" then
+                phase.enum_total = phase.enum_total + 1
+                phase.variant_total = phase.variant_total + #t.variants
+                info.enum_total = info.enum_total + 1
+                info.variant_total = info.variant_total + #t.variants
+            else
+                phase.record_total = phase.record_total + 1
+                info.record_total = info.record_total + 1
+            end
+        end)
+
+        U.each(I.boundaries, function(b)
+            local phase = H.ensure_phase_bucket(info.by_phase, b.phase)
+
+            phase.boundary_total = phase.boundary_total + 1
+            if H.is_stub(b) then
+                phase.boundary_stub = phase.boundary_stub + 1
+                info.boundary_stub = info.boundary_stub + 1
+            else
+                phase.boundary_real = phase.boundary_real + 1
+                info.boundary_real = info.boundary_real + 1
+            end
+        end)
+
+        U.each(phases, function(phase_name)
+            local phase = info.by_phase[phase_name]
+            if phase and phase.boundary_total > 0 then
+                phase.boundary_coverage = phase.boundary_real / phase.boundary_total
+            end
+        end)
+
+        if info.boundary_total > 0 then
+            info.boundary_coverage = info.boundary_real / info.boundary_total
+        end
+
+        return info
+    end
+
+    function I.pipeline()
+        local edges = {}
+        for i = 1, #pipeline_phases - 1 do
+            local from = pipeline_phases[i]
+            local to = pipeline_phases[i + 1]
+            local primary = I.phase_primary_verbs[from] or { verb = "?", count = 0 }
+
+            edges[#edges + 1] = {
+                from = from,
+                to = to,
+                verb = primary.verb,
+                count = primary.count,
+            }
+        end
+
+        return edges
+    end
+
+    function I.type_graph(root_type, max_depth)
+        return H.render_type_graph(
+            I.type_map,
+            function(type_name, phase_name)
+                return resolve_type_name(type_name, phase_name)
+            end,
+            root_type,
+            max_depth)
+    end
+
+    function I.prompt_for(boundary_name, max_depth)
+        local b = H.find_boundary(I.boundaries, boundary_name)
+        if not b then
+            return "boundary not found: " .. tostring(boundary_name)
+        end
+
+        local child_items = H.collect_prompt_child_items(
+            I.boundaries,
+            function(t) return direct_refs(t) end,
+            b)
+
+        local sections = {}
+        H.append_prompt_sections(
+            sections,
+            b,
+            I.type_graph(b.receiver, max_depth or 3),
+            child_items)
+
+        return table.concat(sections, "\n\n")
+    end
+
+    function I.markdown()
+        local lines = { "# Schema Documentation", "" }
+
+        U.each(phases, function(phase_name)
+            H.append_phase_markdown(
+                lines,
+                phase_name,
+                I.types_by_phase[phase_name],
+                I.boundaries_by_phase[phase_name])
+        end)
+
+        return table.concat(lines, "\n")
+    end
+
+    function I.test_all()
+        local results = {}
+        local passed = 0
+
+        U.each(I.boundaries, function(b)
+            local result = {
+                boundary = b.receiver .. ":" .. b.name,
+                exists = type(b.fn) == "function",
+                stub = H.is_stub(b),
+            }
+            results[#results + 1] = result
+            if result.exists and not result.stub then
+                passed = passed + 1
+            end
+        end)
+
+        return {
+            results = results,
+            passed = passed,
+            total = #results,
+        }
+    end
+
+    function I.scaffold(boundary_name)
+        local b = H.find_boundary(I.boundaries, boundary_name)
+        if not b then return nil end
+
+        local t = b.type
+        local lines = {
+            "local U = require 'unit'",
+            "",
+            "-- " .. b.receiver .. ":" .. b.name .. "()",
+            "-- Phase: " .. b.phase,
+            "",
+            "function " .. t.name .. ":" .. b.name .. "()",
+        }
+
+        if t.kind == "enum" then
+            H.append_enum_scaffold(lines, t.variants)
+            return table.concat(lines, "\n")
+        end
+
+        local child_calls = H.collect_record_scaffold_calls(
+            I.type_map,
+            function(type_name, phase_name)
+                return resolve_type_name(type_name, phase_name)
+            end,
+            t,
+            b.name)
+
+        H.append_record_scaffold(lines, b.name, child_calls)
+        return table.concat(lines, "\n")
+    end
+
+    function I.status()
+        return H.render_status(I.progress(), phases)
+    end
+
+    return I
+end
+
+function M.install(U)
+    U.inspect = function(ctx, phases, pipeline_phases)
+        return M.build(U, ctx, phases, pipeline_phases)
+    end
+    return U
 end
 
 return M
