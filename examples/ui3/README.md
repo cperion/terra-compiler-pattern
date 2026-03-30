@@ -10,7 +10,8 @@ This directory is currently a scaffold with the first Layer-0 Terra leaf work st
 - benchmark entrypoints now load the project directly with `U.load_inspect_spec("examples/ui3")`
 - former installer modules are now routed through receiver-owned boundary files; `_old` modules remain only as parked migration references
 - `ui3_asdl_old.lua` remains in the tree as the old generated-string source and migration reference
-- `ui3_redesign_asdl_sketch.lua` preserves the current exploratory sketch
+- `ui3_redesign_asdl_sketch.lua` preserves the older exploratory lower-half sketch
+- `ui3_redesign_asdl_proposal.lua` captures the newer `UiSpine / UiMeasure / UiSolved` proposal snapshot
 - `backends/terra_layer0_unit.t` is the raw backend-facing Unit benchmark leaf
 - `ui3_layer0_bench.t` benchmarks Layer 0 directly
 - `ui3_layer1_bench.t` benchmarks the canonical `gen / param / state` layer
@@ -37,7 +38,7 @@ Current schema boundary coverage is now `16/16`.
 3. only then move to Layer 1: canonical `gen / param / state`
 4. if the next trusted boundary is slow, audit the ASDL above it
 
-## Current target architecture
+## Live scaffold architecture
 
 ```text
 UiDecl
@@ -76,6 +77,40 @@ UiQueryScene
 UiQueryMachineIR
   -> reducer/query execution
 ```
+
+## New proposal snapshot
+
+The newer proposal currently lives as a design artifact in
+`ui3_redesign_asdl_proposal.lua`. It keeps the same strong top/source language,
+but replaces the lower-half split with:
+
+```text
+UiDecl
+  -> bind                -> UiBound
+  -> flatten             -> UiSpine
+  -> lower_measure       -> UiMeasure
+  -> solve               -> UiSolved
+
+UiSpine
+  -> lower_render_semantics -> UiRenderSemantics
+UiSolved + UiRenderSemantics
+  -> project_render_use     -> UiRenderUse
+  -> schedule_render        -> UiRenderPlan
+  -> define_render_machine  -> UiMachine.Render
+
+UiSpine
+  -> lower_query_semantics  -> UiQuerySemantics
+UiSolved + UiQuerySemantics
+  -> project_query_use      -> UiQueryUse
+  -> organize_query         -> UiQueryPlan
+
+UiSession + UiQueryPlan + UiInput
+  -> reduce_ui              -> UiApply.Result
+```
+
+This proposal is intentionally not wired into `schema/app.asdl` or the live
+`pipeline.lua` yet; it is stored separately so the redesign can be revised
+without breaking the current scaffold and benchmarks.
 
 ## Design notes
 
