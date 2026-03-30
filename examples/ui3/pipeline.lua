@@ -1,0 +1,16 @@
+return {
+    "UiInput",
+    "UiSession",
+    "UiDecl",
+    "UiBound",
+    "UiFlat",
+    "UiGeometryInput",
+    "UiGeometry",
+    "UiRenderFacts",
+    "UiRenderScene",
+    "UiRenderMachineIR",
+    "UiQueryFacts",
+    "UiQueryScene",
+    "UiQueryMachineIR",
+    "UiMachine",
+}

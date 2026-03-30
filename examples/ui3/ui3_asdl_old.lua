@@ -517,9 +517,14 @@ module UiDecl {
                   UiCore.ImageRef image,
                   UiCore.ImageStyle style
               )
-            | CustomContent(
+            | InlineCustomContent(
                   number family,
                   number payload
+              )
+            | ResourceCustomContent(
+                  number family,
+                  number resource_payload,
+                  number instance_payload
               )
 
     -- ------------------------------------------------------------------------
@@ -753,7 +758,7 @@ module UiApply {
     -- Pure UI reducer result.
     --
     -- The reducer consumes:
-    --   UiSession.State + UiQuery.Scene + UiInput.Event
+    --   UiSession.State + UiQueryMachineIR.Scene + UiInput.Event
     --
     -- and produces:
     --   updated UiSession.State + emitted UiIntent.Event*
@@ -804,24 +809,11 @@ module UiBound {
     ) unique
 
     -- ------------------------------------------------------------------------
-    -- Local state
-    -- ------------------------------------------------------------------------
-    Flags = (
-        boolean visible,
-        boolean enabled
-    ) unique
-
-    -- ------------------------------------------------------------------------
     -- Layout facet
     -- ------------------------------------------------------------------------
-    -- Layout is still semantic layout intent, but it is now bound:
-    --   - anchor targets are validated references
-    --   - authored irregularity is normalized
+    -- Layout is still semantic layout intent, but bind consumes one real fact
+    -- here: anchored positions are validated against the current entry subtree.
     -- ------------------------------------------------------------------------
-    AnchorTarget = (
-        UiCore.ElementId target
-    ) unique
-
     Position = InFlow()
              | Absolute(
                    UiCore.EdgeMeasure left,
@@ -829,8 +821,8 @@ module UiBound {
                    UiCore.EdgeMeasure right,
                    UiCore.EdgeMeasure bottom
                )
-             | Anchored(
-                   AnchorTarget target,
+             | AnchoredTo(
+                   UiCore.ElementId target,
                    UiCore.AnchorX self_x,
                    UiCore.AnchorY self_y,
                    UiCore.AnchorX target_x,
@@ -840,182 +832,48 @@ module UiBound {
                )
 
     Layout = (
-        UiCore.SizeSpec width,
-        UiCore.SizeSpec height,
-        Position position,
-        UiCore.Flow flow,
-        UiCore.GridTemplate? grid,
-        UiCore.GridCell? cell,
-        UiCore.MainAlign main_align,
-        UiCore.CrossAlign cross_align,
-        UiCore.Insets padding,
-        UiCore.Insets margin,
-        number gap,
-        UiCore.Overflow overflow_x,
-        UiCore.Overflow overflow_y,
-        UiCore.Aspect? aspect
+        UiDecl.Layout source,
+        Position position
     ) unique
-
-    -- ------------------------------------------------------------------------
-    -- Paint facet
-    -- ------------------------------------------------------------------------
-    -- Paint stays close to the authored language here. Binding does not yet
-    -- solve geometry or emit draw atoms; it only preserves local visual intent
-    -- in a bound phase-local vocabulary.
-    -- ------------------------------------------------------------------------
-    Paint = (
-        PaintOp* ops
-    ) unique
-
-    PaintOp = Box(
-                  UiCore.Brush fill,
-                  UiCore.Brush? stroke,
-                  number stroke_width,
-                  UiCore.StrokeAlign align,
-                  UiCore.Corners corners
-              )
-            | Shadow(
-                  UiCore.Brush brush,
-                  number blur,
-                  number spread,
-                  number dx,
-                  number dy,
-                  UiCore.ShadowKind shadow_kind,
-                  UiCore.Corners corners
-              )
-            | Clip(
-                  UiCore.Corners corners
-              )
-            | Opacity(
-                  number value
-              )
-            | Transform(
-                  UiCore.Transform2D xform
-              )
-            | Blend(
-                  UiCore.BlendMode mode
-              )
-            | CustomPaint(
-                  number family,
-                  number payload
-              )
 
     -- ------------------------------------------------------------------------
     -- Content facet
     -- ------------------------------------------------------------------------
-    -- Content is normalized into bound semantic forms.
-    --
-    -- The key binding move here is that text styling is made explicit:
-    --   - resolved font ref is mandatory
-    --   - optional source style fields become concrete values
-    --   - authored text layout fields remain explicit but no longer optional
-    --
-    -- Text is still not measured or shaped here. That happens later.
+    -- Content is normalized into bound semantic forms only where bind consumes
+    -- real knowledge. Text keeps a dedicated bound record because authored text
+    -- style is normalized and font selection is resolved here.
     -- ------------------------------------------------------------------------
-    BoundText = (
-        UiCore.TextValue value,
+    BoundTextStyle = (
         UiCore.FontRef font,
         number size_px,
         UiCore.FontWeight weight,
         UiCore.FontSlant slant,
         number letter_spacing_px,
         number line_height_px,
-        UiCore.Color color,
-        UiCore.TextWrap wrap,
-        UiCore.TextOverflow overflow,
-        UiCore.TextAlign align,
-        number line_limit
+        UiCore.Color color
     ) unique
 
-    BoundImage = (
-        UiCore.ImageRef image,
-        UiCore.ImageStyle style
+    BoundText = (
+        UiCore.TextValue value,
+        BoundTextStyle style,
+        UiCore.TextLayout layout
     ) unique
 
     Content = NoContent()
             | Text(BoundText text)
-            | Image(BoundImage image)
-            | CustomContent(
+            | Image(
+                  UiCore.ImageRef image,
+                  UiCore.ImageStyle style
+              )
+            | InlineCustomContent(
                   number family,
                   number payload
               )
-
-    -- ------------------------------------------------------------------------
-    -- Behavior facet
-    -- ------------------------------------------------------------------------
-    -- Behavior is still semantic interaction intent, but in bound form:
-    -- refs are validated, defaults are canonicalized, and later phases do not
-    -- need to reinterpret UiDecl.Behavior directly.
-    -- ------------------------------------------------------------------------
-    HitPolicy = HitNone()
-              | HitSelf()
-              | HitSelfAndChildren()
-              | HitChildrenOnly()
-
-    FocusPolicy = NotFocusable()
-                | Focusable(
-                      UiCore.FocusMode mode,
-                      number? order
-                  )
-
-    PointerRule = Hover(
-                      UiCore.CursorRef? cursor,
-                      UiCore.CommandRef? enter,
-                      UiCore.CommandRef? leave
-                  )
-                | Press(
-                      UiCore.PointerButton button,
-                      number click_count,
-                      UiCore.CommandRef command
-                  )
-                | Toggle(
-                      UiCore.ToggleValue value,
-                      UiCore.PointerButton button,
-                      UiCore.CommandRef? command
-                  )
-                | Gesture(
-                      UiCore.Gesture gesture,
-                      UiCore.CommandRef command
-                  )
-
-    ScrollRule = (
-        UiCore.Axis axis,
-        UiCore.ScrollRef? model
-    ) unique
-
-    KeyRule = (
-        UiCore.KeyChord chord,
-        UiCore.KeyEvent when,
-        UiCore.CommandRef command,
-        boolean global
-    ) unique
-
-    EditRule = (
-        UiCore.TextModelRef model,
-        boolean multiline,
-        boolean read_only,
-        UiCore.CommandRef? changed
-    ) unique
-
-    DragDropRule = Draggable(
-                       UiCore.DragPayload payload,
-                       UiCore.CommandRef? begin,
-                       UiCore.CommandRef? finish
-                   )
-                 | DropTarget(
-                       UiCore.DropPolicy policy,
-                       UiCore.CommandRef command
-                   )
-
-    Behavior = (
-        HitPolicy hit,
-        FocusPolicy focus,
-        PointerRule* pointer,
-        ScrollRule? scroll,
-        KeyRule* keys,
-        EditRule? edit,
-        DragDropRule* drag_drop
-    ) unique
+            | ResourceCustomContent(
+                  number family,
+                  number resource_payload,
+                  number instance_payload
+              )
 
     -- ------------------------------------------------------------------------
     -- Accessibility facet
@@ -1038,11 +896,11 @@ module UiBound {
         UiCore.SemanticRef? semantic_ref,
         string? debug_name,
         UiCore.Role role,
-        Flags flags,
+        UiDecl.Flags flags,
         Layout layout,
-        Paint paint,
+        UiDecl.Paint paint,
         Content content,
-        Behavior behavior,
+        UiDecl.Behavior behavior,
         Accessibility accessibility,
         Node* children
     ) unique
@@ -1164,198 +1022,36 @@ module UiFlat {
     ) unique
 
     ContentFacet = (
-        ContentSource content
+        UiBound.Content content
     ) unique
 
     -- --------------------------------------------------------------------
-    -- Content is one real facet, because it is one real node-level domain
-    -- choice with a genuine sum type.
-    --
-    -- Important design rule:
-    --   do not decompose mutually exclusive content variants into separate fake
-    --   facet planes. Keep one sum-typed content source facet.
-    --
-    -- But also:
-    --   do not merely alias `UiBound.Content` here. `UiFlat` should define its
-    --   own source-side content contract explicitly.
-    ContentSource = NoContent()
-                  | Text(TextSource text)
-                  | Image(ImageSource image)
-                  | Custom(CustomSource custom)
-
-    TextSource = (
-        UiCore.TextValue value,
-        UiCore.FontRef font,
-        number size_px,
-        UiCore.FontWeight weight,
-        UiCore.FontSlant slant,
-        number letter_spacing_px,
-        number line_height_px,
-        UiCore.Color color,
-        UiCore.TextWrap wrap,
-        UiCore.TextOverflow overflow,
-        UiCore.TextAlign align,
-        number line_limit
-    ) unique
-
-    ImageSource = (
-        UiCore.ImageRef image,
-        UiCore.ImageFit fit,
-        UiCore.ImageSampling sampling
-    ) unique
-
-    CustomSource = (
-        number family,
-        number payload
-    ) unique
-
+    -- Content is one real facet, and flatten should preserve the already-bound
+    -- semantic truth rather than restating it in a near-isomorphic UiFlat-
+    -- local vocabulary.
     PaintFacet = (
-        PaintSource paint
+        UiDecl.Paint paint
     ) unique
 
     -- --------------------------------------------------------------------
-    -- Paint is one real facet, but it should be expressed here as an explicit
-    -- flat/source-side visual-intent vocabulary rather than a direct alias of
-    -- the bound-layer paint type.
-    --
-    -- Important design rule:
-    --   keep ordered local paint intent here; let `lower_render_facts` perform
-    --   the real classification into effects, decorations, and custom render
-    --   facts.
-    PaintSource = (
-        PaintOpSource* ops
-    ) unique
-
-    PaintOpSource = Box(
-                        UiCore.Brush fill,
-                        UiCore.Brush? stroke,
-                        number stroke_width,
-                        UiCore.StrokeAlign align,
-                        UiCore.Corners corners
-                    )
-                  | Shadow(
-                        UiCore.Brush brush,
-                        number blur,
-                        number spread,
-                        number dx,
-                        number dy,
-                        UiCore.ShadowKind shadow_kind,
-                        UiCore.Corners corners
-                    )
-                  | Clip(
-                        UiCore.Corners corners
-                    )
-                  | Opacity(
-                        number value
-                    )
-                  | Transform(
-                        UiCore.Transform2D xform
-                    )
-                  | Blend(
-                        UiCore.BlendMode mode
-                    )
-                  | CustomPaint(
-                        number family,
-                        number payload
-                    )
-
+    -- Paint is one real facet. Flatten preserves ordered local paint intent;
+    -- `lower_render_facts` remains the boundary that classifies it into
+    -- render-specific effects, decorations, and custom render facts.
     BehaviorFacet = (
-        BehaviorSource behavior
+        UiDecl.Behavior behavior
     ) unique
 
     -- --------------------------------------------------------------------
-    -- Behavior is one real facet, but it should be expressed here as an
-    -- explicit flat/source-side interaction-intent vocabulary rather than a
-    -- direct alias of the bound-layer behavior type.
-    --
-    -- Important design rule:
-    --   keep behavior as one structured source facet here; let
-    --   `lower_query_facts` perform the real lowering into direct query facts,
-    --   key buckets, focus-order access paths, and other query-oriented forms.
-    BehaviorSource = (
-        HitSource hit,
-        FocusSource focus,
-        PointerSource* pointer,
-        ScrollSource? scroll,
-        KeySource* keys,
-        EditSource? edit,
-        DragDropSource* drag_drop
-    ) unique
-
-    HitSource = HitNone()
-              | HitSelf()
-              | HitSelfAndChildren()
-              | HitChildrenOnly()
-
-    FocusSource = NotFocusable()
-                | Focusable(
-                      UiCore.FocusMode mode,
-                      number? order
-                  )
-
-    PointerSource = Hover(
-                        UiCore.CursorRef? cursor,
-                        UiCore.CommandRef? enter,
-                        UiCore.CommandRef? leave
-                    )
-                  | Press(
-                        UiCore.PointerButton button,
-                        number click_count,
-                        UiCore.CommandRef command
-                    )
-                  | Toggle(
-                        UiCore.ToggleValue value,
-                        UiCore.PointerButton button,
-                        UiCore.CommandRef? command
-                    )
-                  | Gesture(
-                        UiCore.Gesture gesture,
-                        UiCore.CommandRef command
-                    )
-
-    ScrollSource = (
-        UiCore.Axis axis,
-        UiCore.ScrollRef? model
-    ) unique
-
-    KeySource = (
-        UiCore.KeyChord chord,
-        UiCore.KeyEvent when,
-        UiCore.CommandRef command,
-        boolean global
-    ) unique
-
-    EditSource = (
-        UiCore.TextModelRef model,
-        boolean multiline,
-        boolean read_only,
-        UiCore.CommandRef? changed
-    ) unique
-
-    DragDropSource = Draggable(
-                         UiCore.DragPayload payload,
-                         UiCore.CommandRef? begin,
-                         UiCore.CommandRef? finish
-                     )
-                   | DropTarget(
-                         UiCore.DropPolicy policy,
-                         UiCore.CommandRef command
-                     )
-
+    -- Behavior is one real facet. Flatten preserves the already-bound
+    -- interaction truth; `lower_query_facts` remains the boundary that lowers
+    -- it into direct query facts and access paths.
     AccessibilityFacet = (
-        AccessibilitySource accessibility
+        UiBound.Accessibility accessibility
     ) unique
 
     -- Accessibility remains a separate facet from behavior because it is a
     -- distinct semantic concern even if the same later query branch consumes
     -- both.
-    AccessibilitySource = Hidden()
-                        | Exposed(
-                              UiCore.AccessibleRole role,
-                              string? label,
-                              string? description,
-                              number sort_priority
-                          )
 }
 
 
@@ -1407,7 +1103,15 @@ module UiGeometryInput {
     Region = (
         UiFlatShape.RegionHeader header,
         UiFlatShape.NodeHeader* headers,
-        Node* nodes
+        Participation* participation,
+        AxisSpec* width_specs,
+        AxisSpec* height_specs,
+        PositionOp* positions,
+        FlowOp* flows,
+        UiCore.Insets* paddings,
+        UiCore.Insets* margins,
+        ScrollModel* scroll_models,
+        IntrinsicMetrics* intrinsics
     ) unique
 
     -- --------------------------------------------------------------------
@@ -1420,78 +1124,86 @@ module UiGeometryInput {
     ) unique
 
     -- --------------------------------------------------------------------
-    -- Solver-facing position input.
+    -- Compiled axis measurement program.
     -- --------------------------------------------------------------------
-    -- Anchors are already converted to flat region-local indices.
-    Position = InFlow()
-             | Absolute(
-                   UiCore.EdgeMeasure left,
-                   UiCore.EdgeMeasure top,
-                   UiCore.EdgeMeasure right,
-                   UiCore.EdgeMeasure bottom
-               )
-             | AnchoredTo(
-                   number target_index,
-                   UiCore.AnchorX self_x,
-                   UiCore.AnchorY self_y,
-                   UiCore.AnchorX target_x,
-                   UiCore.AnchorY target_y,
-                   number dx,
-                   number dy
-               )
-
-    -- --------------------------------------------------------------------
-    -- Solver-facing layout specification.
-    -- --------------------------------------------------------------------
-    Layout = (
-        UiCore.SizeSpec width,
-        UiCore.SizeSpec height,
-        Position position,
-        UiCore.Flow flow,
-        UiCore.GridTemplate? grid,
-        UiCore.GridCell? cell,
-        UiCore.MainAlign main_align,
-        UiCore.CrossAlign cross_align,
-        UiCore.Insets padding,
-        UiCore.Insets margin,
-        number gap,
-        UiCore.Overflow overflow_x,
-        UiCore.Overflow overflow_y,
-        UiCore.Aspect? aspect
+    -- mode codes:
+    --   0 = auto
+    --   1 = px
+    --   2 = percent
+    --   3 = content
+    --   4 = flex
+    AxisSpec = (
+        number min_mode,
+        number min_value,
+        number preferred_mode,
+        number preferred_value,
+        number max_mode,
+        number max_value
     ) unique
 
     -- --------------------------------------------------------------------
-    -- Intrinsic size descriptors.
+    -- Compiled position program.
     -- --------------------------------------------------------------------
-    -- These are geometry-facing measurement summaries.
-    -- The goal is to avoid carrying rich render styling here unless geometry
-    -- genuinely needs it.
-    TextIntrinsic = (
-        number line_height_px,
-        number min_content_w,
-        number max_content_w
+    -- kind codes:
+    --   0 = inflow
+    --   1 = absolute
+    --   2 = anchored
+    --
+    -- edge mode codes:
+    --   0 = unset
+    --   1 = px
+    --   2 = percent
+    --
+    -- anchor codes:
+    --   0 = start/left/top
+    --   1 = center
+    --   2 = end/right/bottom
+    PositionOp = (
+        number kind,
+        number target_index,
+        number left_mode,
+        number left_value,
+        number top_mode,
+        number top_value,
+        number right_mode,
+        number right_value,
+        number bottom_mode,
+        number bottom_value,
+        number self_x,
+        number self_y,
+        number target_x,
+        number target_y,
+        number dx,
+        number dy
     ) unique
 
-    ImageIntrinsic = (
-        UiCore.Size intrinsic
+    -- --------------------------------------------------------------------
+    -- Compiled flow program.
+    -- --------------------------------------------------------------------
+    -- kind codes:
+    --   0 = none
+    --   1 = row
+    --   2 = column
+    --   3 = stack
+    FlowOp = (
+        number kind,
+        number gap
     ) unique
 
-    CustomIntrinsic = (
+    ScrollModel = (
+        boolean needs_scroll_x,
+        boolean needs_scroll_y
+    ) unique
+
+    -- --------------------------------------------------------------------
+    -- Geometry-facing measurable summaries.
+    -- --------------------------------------------------------------------
+    -- These are compiled measurable facts, not rich content grammar.
+    IntrinsicMetrics = (
         number min_content_w,
         number min_content_h,
         number ideal_content_w,
         number ideal_content_h
-    ) unique
-
-    Intrinsic = NoIntrinsic()
-              | Text(TextIntrinsic text)
-              | Image(ImageIntrinsic image)
-              | Custom(CustomIntrinsic custom)
-
-    Node = (
-        Participation state,
-        Layout layout,
-        Intrinsic intrinsic
     ) unique
 }
 
@@ -1662,8 +1374,15 @@ module UiRenderFacts {
         UiCore.ImageSampling sampling
     ) unique
 
-    CustomContent = ResourceLike(number family, number payload)
-                  | InstanceLike(number family, number payload)
+    CustomContent = InlineCustomContent(
+                        number family,
+                        number payload
+                    )
+                  | ResourceCustomContent(
+                        number family,
+                        number resource_payload,
+                        number instance_payload
+                    )
 
     Content = NoContent()
             | Text(TextContent text)
@@ -2478,8 +2197,102 @@ module UiMachine {
         UiRenderMachineIR.Shape shape
     ) unique
 
+    -- --------------------------------------------------------------------
+    -- Important Layer-1 audit result:
+    -- --------------------------------------------------------------------
+    -- RenderParam should not merely wrap UiRenderMachineIR.Input directly.
+    -- The machine layer should instead carry a more install-ready packed
+    -- payload plus explicit runtime realization requests, so materialize()
+    -- mostly installs state and realizes assets instead of re-lowering broad
+    -- machine IR on every call.
     RenderParam = (
-        UiRenderMachineIR.Input input
+        PackedInput payload
+    ) unique
+
+    PackedInput = (
+        UiRenderMachineIR.RegionSpan* regions,
+        BatchParam* batches,
+        BoxParam* boxes,
+        ShadowParam* shadows,
+        TextRequest* text_requests,
+        TextDraw* texts,
+        ImageRequest* image_requests,
+        ImageDraw* images
+    ) unique
+
+    BatchParam = (
+        UiRenderMachineIR.BatchKind kind,
+        number item_start,
+        number item_count,
+        UiCore.Rect? clip_rect,
+        number opacity,
+        UiCore.BlendMode blend,
+        UiCore.Transform2D? transform
+    ) unique
+
+    BoxParam = (
+        UiCore.Rect rect,
+        UiCore.Color fill,
+        UiCore.Color? stroke,
+        number stroke_width,
+        UiCore.StrokeAlign align,
+        UiCore.Corners corners
+    ) unique
+
+    ShadowParam = (
+        UiCore.Rect rect,
+        UiCore.Color color,
+        number blur,
+        number spread,
+        number dx,
+        number dy,
+        UiCore.ShadowKind shadow_kind,
+        UiCore.Corners corners
+    ) unique
+
+    TextRequest = (
+        number key,
+        UiCore.TextValue text,
+        UiCore.FontRef font,
+        number size_px,
+        UiCore.FontWeight weight,
+        UiCore.FontSlant slant,
+        number letter_spacing_px,
+        number line_height_px,
+        UiCore.Color color,
+        UiCore.TextWrap wrap,
+        UiCore.TextOverflow overflow,
+        UiCore.TextAlign align,
+        number line_limit,
+        number width_px
+    ) unique
+
+    TextDraw = (
+        number request_index,
+        UiCore.Rect bounds
+    ) unique
+
+    ImageRequest = (
+        number key,
+        UiCore.ImageRef image,
+        UiCore.ImageSampling sampling
+    ) unique
+
+    ImageDraw = (
+        number request_index,
+        UiCore.Rect rect,
+        UiCore.ImageFit fit,
+        UiCore.Corners corners
+    ) unique
+
+    TextResidency = (
+        number request_index,
+        number key
+    ) unique
+
+    ImageResidency = (
+        number request_index,
+        number key
     ) unique
 
     -- --------------------------------------------------------------------
@@ -2489,8 +2302,14 @@ module UiMachine {
     -- though the layer above may still call its pure description a
     -- `StateSchema`. The point here is to keep the machine role explicit:
     -- this is what will become the runtime-owned state role below `Unit`.
+    --
+    -- Layer-1 residency refinement:
+    --   text/image realization should be modeled as explicit machine-owned
+    --   residency slots, not left implicit inside backend-global caches.
     RenderState = (
-        UiRenderMachineIR.StateSchema schema
+        UiRenderMachineIR.StateSchema schema,
+        TextResidency* text_residency,
+        ImageResidency* image_residency
     ) unique
 
     -- --------------------------------------------------------------------

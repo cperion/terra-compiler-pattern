@@ -40,7 +40,7 @@ return [=[
 --     -> reducer/query execution
 --
 -- Notes:
---   - this file is intentionally separate from examples/ui3/ui3_asdl.lua
+--   - this file is intentionally separate from examples/ui3/ui3_asdl_old.lua
 --   - use this file for redesign iteration before rewriting the live ASDL
 --   - placeholders exist only to keep the sketch structurally explicit
 
