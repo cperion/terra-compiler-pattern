@@ -131,7 +131,12 @@ local function test_machine_step_and_iter_helpers()
     local step = U.machine_step(function(param, state, x)
         state.calls = (state.calls or 0) + 1
         return x + param.offset
-    end, { offset = 3 }, nil, "adder")
+    end, { offset = 3 }, nil, {
+        family = "adder",
+        realize_luajit = function() end,
+    })
+
+    assert(type(step.realize_luajit) == "function")
 
     assert(U.is_machine(step))
     assert(step.shape == "step")
@@ -142,7 +147,12 @@ local function test_machine_step_and_iter_helpers()
         if cursor > limit then return nil end
         state.count = (state.count or 0) + 1
         return cursor + 1, cursor * param.scale
-    end, 1, { scale = 2 }, nil, "scaled_range")
+    end, 1, { scale = 2 }, nil, {
+        family = "scaled_range",
+        cursor_t = "number",
+    })
+
+    assert(iter.cursor_t == "number")
 
     assert(U.is_machine(iter))
     assert(iter.shape == "iter")

@@ -68,6 +68,8 @@ Backend-independent schema/reflection helpers used by inspection and scaffolding
 Owns Terra-specific behavior as the opt-in explicit-native backend:
 
 - Terra `Unit` construction
+- Terra `Machine -> Unit` realization (`U.machine_to_unit`)
+- terminal auto-realization when a Terra terminal returns a `Machine`
 - ABI validation
 - Terra quote composition
 - Terra state struct synthesis
@@ -98,6 +100,7 @@ Owns LuaJIT-specific behavior:
 - closure-based leaf compilation
 - explicit `Machine -> Unit` realization (`U.machine_to_unit`)
 - terminal auto-realization when a LuaJIT terminal returns a `Machine`
+- direct realization of callable step and iter machines
 - FFI/cdata state layouts for production leaves
 - LuaJIT hot-slot swapping
 - Lua callback application loop

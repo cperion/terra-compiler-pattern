@@ -301,7 +301,26 @@ end
 -- terminal: memoized ASDL → Unit compilation
 -- Unit.new already validates ABI + calls fn:compile().
 function U.terminal(name_or_fn, maybe_fn)
-    return U._memoize_with(terralib.memoize, "terminal", name_or_fn, maybe_fn)
+    if type(name_or_fn) == "string" then
+        local name = name_or_fn
+        local fn = maybe_fn
+        return U._memoize_with(terralib.memoize, "terminal", name, function(...)
+            local out = fn(...)
+            if U.is_machine(out) then
+                return U.machine_to_unit(out)
+            end
+            return out
+        end)
+    end
+
+    local fn = name_or_fn
+    return U._memoize_with(terralib.memoize, "terminal", function(...)
+        local out = fn(...)
+        if U.is_machine(out) then
+            return U.machine_to_unit(out)
+        end
+        return out
+    end)
 end
 
 
@@ -340,6 +359,51 @@ end
 --   jack_set_callback(slot.callback:getpointer())
 --   -- On edit:
 --   slot.swap(compile_session(new_project))
+local function unit_from_realized_machine(value, state_t, where)
+    if type(value) == "table" and value.fn ~= nil and value.state_t ~= nil then
+        return value
+    end
+    if terralib.isfunction(value) then
+        return U.new(value, state_t)
+    end
+    error(where .. ": expected Terra function or Unit from machine realization", 3)
+end
+
+function U.machine_to_unit(machine)
+    if not U.is_machine(machine) then
+        error("U.machine_to_unit: expected a Machine", 2)
+    end
+
+    local realize = machine.realize_terra or machine.realize
+    if type(realize) == "function" then
+        return unit_from_realized_machine(realize(machine, U), machine.state_t or EMPTY, "U.machine_to_unit")
+    end
+
+    local state_t = machine.state_t or EMPTY
+
+    if machine.shape == "step" then
+        local run = machine.run
+        if terralib.isfunction(run) then
+            if machine.param ~= nil then
+                error("U.machine_to_unit: Terra step Machines with non-nil param require a codegen function or realize_terra hook", 2)
+            end
+            return U.new(run, state_t)
+        end
+
+        if type(run) == "function" then
+            return unit_from_realized_machine(run(machine.param, state_t, machine, U), state_t, "U.machine_to_unit")
+        end
+
+        error("U.machine_to_unit: Terra step Machine run must be a Terra function, Lua codegen function, or use realize_terra", 2)
+    end
+
+    if machine.shape == "iter" then
+        error("U.machine_to_unit: Terra iter Machines require a realize_terra/realize hook", 2)
+    end
+
+    error("U.machine_to_unit: unknown machine shape '" .. tostring(machine.shape) .. "'", 2)
+end
+
 function U.hot_slot(fn_type)
     local render_ptr = global(fn_type)
     local state_ptr = global(&uint8)

@@ -11,8 +11,9 @@ module FrontendSource {
         string tokenize_verb,
         string parse_receiver_fqname,
         string parse_verb,
-        string token_phase_name,
         string token_spec_ctor_fqname,
+        string token_cell_ctor_fqname,
+        string token_span_ctor_fqname,
         string source_spec_ctor_fqname
     ) unique
 
@@ -187,92 +188,20 @@ module FrontendLowered {
 
     Spec = (
         FrontendSource.BoundaryTarget target,
-        Tokenizer tokenizer,
-        Parser parser
+        TokenizeMachine tokenize,
+        ParseMachine parse
     ) unique
 
-    Tokenizer = (
+    TokenizeMachine = (
+        FrontendChecked.TokenHeader eof_header,
         SkipPlan* skips,
-        TokenPlan* tokens
+        FixedDispatch* fixed_dispatches,
+        IdentDispatch* ident_dispatches
     ) unique
 
     SkipPlan
         = WhitespaceSkip()
         | LineCommentSkip(string opener)
-
-    TokenPlan
-        = FixedToken(
-            FrontendChecked.TokenHeader header,
-            string text
-        )
-        | IdentToken(
-            FrontendChecked.TokenHeader header,
-            FrontendSource.CharSet start_set,
-            FrontendSource.CharSet continue_set
-        )
-
-    Parser = (
-        FrontendChecked.RuleHeader entry_rule,
-        RulePlan* rules
-    ) unique
-
-    RulePlan = (
-        FrontendChecked.RuleHeader header,
-        ParseOp* ops,
-        ResultPlan result
-    ) unique
-
-    ParseOp
-        = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
-        | CallRule(FrontendChecked.RuleHeader header, number capture_slot)
-        | Branch(BranchArm* arms, boolean eof_ok)
-        | OptionalIfFirst(FrontendChecked.TokenHeader* first_set, ParseOp* ops)
-        | RepeatWhileFirst(FrontendChecked.TokenHeader* first_set, ParseOp* ops)
-        | BeginSeq()
-        | EndSeq()
-
-    BranchArm = (
-        FrontendChecked.TokenHeader* first_set,
-        ParseOp* ops
-    ) unique
-
-    ResultPlan
-        = ReturnCtor(FrontendChecked.CtorTarget ctor, FieldPlan* fields)
-        | ReturnSlot(number slot_id)
-        | ReturnEmpty()
-
-    FieldPlan = (
-        string field_name,
-        SlotSource source
-    ) unique
-
-    SlotSource
-        = ReadSlot(number slot_id)
-        | ReadPresent(number slot_id)
-        | ReadJoined(number slot_id, string separator)
-        | ReadConstBool(boolean value)
-}
-
-module FrontendMachine {
-
-    Spec = (
-        TokenizeBoundary tokenize,
-        ParseBoundary parse
-    ) unique
-
-    Path = (
-        string* parts
-    ) unique
-
-    BoundaryHeader = (
-        Path receiver_path,
-        string verb
-    ) unique
-
-    CtorRef = (
-        number ctor_id,
-        Path ctor_path
-    ) unique
 
     FixedDispatch = (
         number first_byte,
@@ -291,45 +220,37 @@ module FrontendMachine {
         number* continue_bitset_words
     ) unique
 
+    ParseMachine = (
+        FrontendChecked.RuleHeader entry_rule,
+        ResultCtor* result_ctors,
+        FirstSetTable* first_sets,
+        RuleClosurePlan* rules
+    ) unique
+
+    ResultCtor = (
+        number ctor_id,
+        FrontendChecked.CtorTarget ctor
+    ) unique
+
     FirstSetTable = (
         number set_id,
         number* bitset_words
     ) unique
 
-    TokenizeBoundary = (
-        BoundaryHeader header,
-        Path output_spec_ctor_path,
-        Path span_ctor_path,
-        CtorRef* token_ctors,
-        number eof_ctor_id,
-        FrontendLowered.SkipPlan* skips,
-        FixedDispatch* fixed_dispatches,
-        IdentDispatch* ident_dispatches
-    ) unique
-
-    ParseBoundary = (
-        BoundaryHeader header,
-        Path output_spec_ctor_path,
-        CtorRef* result_ctors,
-        FirstSetTable* first_sets,
-        RuleClosurePlan* rules,
-        number entry_rule_id
-    ) unique
-
     RuleClosurePlan
         = TokenRule(
-            number rule_id,
-            FrontendChecked.TokenHeader header,
+            FrontendChecked.RuleHeader header,
+            FrontendChecked.TokenHeader token,
             number capture_slot,
             ResultPlan result
         )
         | SeqRule(
-            number rule_id,
+            FrontendChecked.RuleHeader header,
             Step* steps,
             ResultPlan result
         )
         | ChoiceRule(
-            number rule_id,
+            FrontendChecked.RuleHeader header,
             ChoiceArm* arms,
             ResultPlan result
         )
@@ -341,7 +262,7 @@ module FrontendMachine {
 
     Step
         = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
-        | CallRule(number rule_id, number capture_slot)
+        | CallRule(FrontendChecked.RuleHeader header, number capture_slot)
         | OptionalGroup(number set_id, Step* steps)
         | RepeatGroup(number set_id, Step* steps)
 
@@ -355,6 +276,43 @@ module FrontendMachine {
         | ReadPresent(number slot_id)
         | ReadJoined(number slot_id, string separator)
         | ReadConstBool(boolean value)
+}
+
+module FrontendMachine {
+
+    Spec = (
+        TokenizeInstall tokenize,
+        ParseInstall parse
+    ) unique
+
+    Path = (
+        string* parts
+    ) unique
+
+    BoundaryHeader = (
+        Path receiver_path,
+        string verb
+    ) unique
+
+    CtorRef = (
+        number ctor_id,
+        Path ctor_path
+    ) unique
+
+    TokenizeInstall = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        Path token_cell_ctor_path,
+        Path span_ctor_path,
+        FrontendLowered.TokenizeMachine machine
+    ) unique
+
+    ParseInstall = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        CtorRef* result_ctors,
+        FrontendLowered.ParseMachine machine
+    ) unique
 }
 
 module FrontendLua {

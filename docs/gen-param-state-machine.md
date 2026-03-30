@@ -17,10 +17,11 @@ But `Unit` is not the first machine concept.
 - `U.machine_iterate(...)`
 - `U.is_machine(...)`
 
-And in LuaJIT:
+And in backend realization:
 
-- `U.machine_to_unit(...)`
-- `U.terminal(...)` can auto-realize returned `Machine`s
+- LuaJIT lowers callable Machines directly via `U.machine_to_unit(...)`
+- Terra lowers direct Terra Machines, Terra codegen Machines, or Machines with explicit realization hooks via `U.machine_to_unit(...)`
+- `U.terminal(...)` can auto-realize returned `Machine`s on both backends
 
 The better articulation is:
 
@@ -78,6 +79,7 @@ That helps with:
 - backend-neutral terminal reasoning
 - LuaJIT vs Terra comparison
 - deciding what the immediate feeder layer above the terminal should contain
+- seeing clearly how the same semantic machine can become different Unit realizations on different backends
 
 ---
 

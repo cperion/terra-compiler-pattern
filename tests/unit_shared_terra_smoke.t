@@ -58,6 +58,49 @@ local quoted = U.leaf_quote(nil, terralib.newlist({ x }), function(_, params)
 end)
 assert(quoted.fn(6) == 12)
 
+local direct_machine = U.machine_step(accum, nil, TerraSmokeState, "terra-direct")
+local direct_unit = U.machine_to_unit(direct_machine)
+local direct_state = terralib.new(TerraSmokeState)
+direct_state.total = 0
+assert(direct_unit.fn(4, direct_state) == 4)
+assert(direct_unit.fn(6, direct_state) == 10)
+
+local builder_machine = U.machine_step(function(param)
+    local input = symbol(int32, "input")
+    return terra([input])
+        return [param.delta] + input
+    end
+end, { delta = 9 }, nil, "terra-builder")
+local builder_unit = U.machine_to_unit(builder_machine)
+assert(builder_unit.fn(3) == 12)
+
+local hooked_iter_machine = U.machine_iter(function()
+    error("hooked Terra iter machine should realize via hook before execution")
+end, 0, nil, nil, {
+    family = "terra-iter-hook",
+    realize_terra = function(_, U_backend)
+        local value = symbol(int32, "value")
+        return U_backend.leaf_quote(nil, terralib.newlist({ value }), function(_, params)
+            return quote
+                return [params[1]] + 2
+            end
+        end)
+    end,
+})
+local hooked_iter_unit = U.machine_to_unit(hooked_iter_machine)
+assert(hooked_iter_unit.fn(5) == 7)
+
+local machine_terminal = U.terminal(function(spec)
+    return U.machine_step(function(param)
+        local input = symbol(int32, "input")
+        return terra([input])
+            return input * [param.scale]
+        end
+    end, { scale = spec.scale }, nil, "terra-terminal-machine")
+end)
+local terminal_unit = machine_terminal({ scale = 3 })
+assert(terminal_unit.fn(7) == 21)
+
 struct IntBox { value : int32 }
 
 local terra inc_ptr(p : &IntBox)

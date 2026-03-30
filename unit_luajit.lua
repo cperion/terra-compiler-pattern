@@ -163,6 +163,15 @@ function U.machine_to_unit(machine)
         error("U.machine_to_unit: expected a Machine", 2)
     end
 
+    local realize = machine.realize_luajit or machine.realize
+    if type(realize) == "function" then
+        local unit = realize(machine, U)
+        if type(unit) ~= "table" or not is_callable(unit.fn) then
+            error("U.machine_to_unit: machine realizer must return a Unit", 2)
+        end
+        return unit
+    end
+
     local state_t = machine.state_t or U.EMPTY
 
     if machine.shape == "step" then

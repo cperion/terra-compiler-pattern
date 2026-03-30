@@ -177,8 +177,8 @@ Currently normalized across backends:
 - `U.leaf(state_t, fn)`
 - `U.silent()`
 - `U.memoize`, `U.transition`, `U.terminal`
-- `U.machine_step(run, param, state_t?, family?)`
-- `U.machine_iter(next_fn, init_cursor, param, state_t?, family?)`
+- `U.machine_step(run, param, state_t?, family_or_opts?, opts?)`
+- `U.machine_iter(next_fn, init_cursor, param, state_t?, family_or_opts?, opts?)`
 - `U.machine_run(machine, runtime_state, ...)`
 - `U.machine_iterate(machine, runtime_state, ...)`
 - `U.is_machine(x)`
@@ -187,9 +187,12 @@ Currently normalized across backends:
 
 Backend-specific realization status:
 
-- LuaJIT implements `U.machine_to_unit(machine)` and `U.terminal(...)` will auto-realize returned `Machine`s into `Unit`s
-- Terra still realizes Units directly through backend-native helpers like `U.leaf(...)`, `U.leaf_quote(...)`, and `U.compose_quote(...)`
-- state layout construction APIs remain backend-specific
+- LuaJIT implements `U.machine_to_unit(machine)` directly for callable step/iter machines, and `U.terminal(...)` auto-realizes returned `Machine`s into `Unit`s
+- Terra implements `U.machine_to_unit(machine)` for:
+  - direct Terra step machines
+  - Terra codegen step machines
+  - explicit `realize_terra` / `realize` hook-based machines
+- raw state layout construction APIs remain backend-specific
 
 This is intentional current truth, not hidden behavior.
 
@@ -286,14 +289,25 @@ It is not a generic runtime DSL. It is a small explicit description of executabl
 - `param` — stable compiled payload
 - `state_t` — runtime-owned mutable state layout, when needed
 
-### `U.machine_step(run, param, state_t?, family?)`
+### `U.machine_step(run, param, state_t?, family_or_opts?, opts?)`
 Create a step-oriented machine.
 
-Contract:
+LuaJIT-direct contract:
 
 ```lua
 run(param, runtime_state, ...) -> ...
 ```
+
+Terra-direct contract:
+
+- `run` may be a Terra function with `param == nil`
+- or `run` may be a Lua codegen function that receives:
+
+```lua
+run(param, state_t, machine, U) -> terra_fn_or_Unit
+```
+
+The common semantic meaning is the same in both cases: `run` is the machine's code-shaping part, `param` is stable payload, and `state_t` is runtime-owned state layout.
 
 Use for leaves that are naturally one callable step per invocation:
 
@@ -303,7 +317,7 @@ Use for leaves that are naturally one callable step per invocation:
 - callbacks
 - scalar/block processing steps
 
-### `U.machine_iter(next_fn, init_cursor, param, state_t?, family?)`
+### `U.machine_iter(next_fn, init_cursor, param, state_t?, family_or_opts?, opts?)`
 Create an iterator-oriented machine.
 
 Contract:
@@ -335,13 +349,26 @@ Use for leaves that are naturally stream/traversal shaped:
 - hit-test walks
 - flattened traversal output
 
+Optional machine options for both constructors may include:
+
+- `family` — machine family tag
+- `realize` — backend-agnostic explicit realization hook
+- `realize_luajit` — LuaJIT-specific realization hook
+- `realize_terra` — Terra-specific realization hook
+- `cursor_t` — backend metadata for iterator cursor typing when needed
+
 ### `U.is_machine(x)`
 Return true if `x` is a `Machine` descriptor created by `unit`.
 
 ### `U.machine_run(machine, runtime_state, ...)`
 Execute a step machine directly without packaging it as a `Unit` first.
 
-Errors if `machine.shape ~= "step"`.
+Errors if:
+
+- `machine.shape ~= "step"`
+- or `machine.run` is not directly Lua-callable
+
+So this helper is primarily for Lua-callable machines and leaf-first testing before backend packaging.
 
 Useful for:
 
@@ -361,7 +388,10 @@ Returns an iterable wrapper compatible with:
 - `U.map`
 - `U.find`
 
-Errors if `machine.shape ~= "iter"`.
+Errors if:
+
+- `machine.shape ~= "iter"`
+- or `machine.next` is not directly Lua-callable
 
 This is how iterator-family machines get the normal traversal benefits from `unit_core` without forcing every machine into iterator semantics.
 
@@ -370,13 +400,14 @@ Backend realization hook from explicit `Machine` to packaged `Unit`.
 
 Current status:
 
-- implemented in LuaJIT
-- not yet generalized in Terra
+- LuaJIT: directly realizes callable step/iter machines
+- Terra: realizes direct Terra step machines, codegen step machines, and machines with explicit `realize_terra` / `realize` hooks
+- Terra iterator machines usually need an explicit realization hook because iterator ABI/lowering is backend-specific
 
 ### `U.terminal(name_or_fn, maybe_fn?)` and Machines
 If a terminal returns a `Machine` instead of a `Unit`, `unit` will attempt to realize it through `U.machine_to_unit(machine)`.
 
-This is currently intended primarily for LuaJIT leaves.
+This is available on both backends, though the exact realization strategy differs by backend.
 
 ---
 
@@ -414,7 +445,7 @@ Use for terminal compilation.
 A terminal may return:
 
 - a realized `Unit`
-- or an explicit `Machine`, in which case `unit` will route it through `U.machine_to_unit(machine)` when the active backend supports that realization path
+- or an explicit `Machine`, in which case `unit` will route it through `U.machine_to_unit(machine)` using the active backend's realization strategy
 
 ### Naming behavior
 If no explicit name is supplied, `unit_core` infers one from debug info where possible.

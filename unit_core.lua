@@ -113,34 +113,54 @@ function M.new()
         return is_machine(value)
     end
 
-    function U.machine_step(run, param, state_t, family)
-        if type_fn(run) ~= "function" then
-            error("U.machine_step: run must be a function", 2)
+    local function normalize_machine_family_and_opts(default_family, family_or_opts, maybe_opts)
+        if type_fn(family_or_opts) == "table" and maybe_opts == nil then
+            local opts = family_or_opts
+            return opts.family or default_family, opts
         end
+        return family_or_opts or default_family, maybe_opts or {}
+    end
+
+    function U.machine_step(run, param, state_t, family_or_opts, maybe_opts)
+        if run == nil then
+            error("U.machine_step: run must not be nil", 2)
+        end
+
+        local family, opts = normalize_machine_family_and_opts("step", family_or_opts, maybe_opts)
 
         return {
             __unit_machine = true,
             shape = "step",
-            family = family or "step",
+            family = family,
             run = run,
             param = param,
             state_t = state_t,
+            realize = opts.realize,
+            realize_luajit = opts.realize_luajit,
+            realize_terra = opts.realize_terra,
+            cursor_t = opts.cursor_t,
         }
     end
 
-    function U.machine_iter(next_fn, init_cursor, param, state_t, family)
-        if type_fn(next_fn) ~= "function" then
-            error("U.machine_iter: next_fn must be a function", 2)
+    function U.machine_iter(next_fn, init_cursor, param, state_t, family_or_opts, maybe_opts)
+        if next_fn == nil then
+            error("U.machine_iter: next_fn must not be nil", 2)
         end
+
+        local family, opts = normalize_machine_family_and_opts("iter", family_or_opts, maybe_opts)
 
         return {
             __unit_machine = true,
             shape = "iter",
-            family = family or "iter",
+            family = family,
             next = next_fn,
             init_cursor = init_cursor,
             param = param,
             state_t = state_t,
+            realize = opts.realize,
+            realize_luajit = opts.realize_luajit,
+            realize_terra = opts.realize_terra,
+            cursor_t = opts.cursor_t,
         }
     end
 
@@ -151,6 +171,9 @@ function M.new()
         if machine.shape ~= "step" then
             error("U.machine_run: expected a step Machine", 2)
         end
+        if type_fn(machine.run) ~= "function" then
+            error("U.machine_run: machine.run is not directly Lua-callable; use backend realization instead", 2)
+        end
         return machine.run(machine.param, runtime_state, ...)
     end
 
@@ -160,6 +183,9 @@ function M.new()
         end
         if machine.shape ~= "iter" then
             error("U.machine_iterate: expected an iter Machine", 2)
+        end
+        if type_fn(machine.next) ~= "function" then
+            error("U.machine_iterate: machine.next is not directly Lua-callable; use backend realization instead", 2)
         end
 
         local args = pack_fn(...)

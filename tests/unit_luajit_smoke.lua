@@ -55,6 +55,17 @@ local function test_machine_realization_and_terminal_normalization()
 
     local unit = compile_value({ delta = 7 })
     assert(unit.fn(nil, 5) == 12)
+
+    local hooked = U.machine_step({}, nil, nil, {
+        family = "hooked",
+        realize_luajit = function(_, U_backend)
+            return U_backend.leaf(nil, function(_, x)
+                return x + 100
+            end)
+        end,
+    })
+    local hooked_unit = U.machine_to_unit(hooked)
+    assert(hooked_unit.fn(nil, 1) == 101)
 end
 
 local function test_leaf_compose_hot_slot()
