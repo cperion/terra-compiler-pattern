@@ -38,8 +38,9 @@ return [=[
 --   - the top/source half intentionally stays close to the current ui3 scaffold
 --   - the lower half is rebuilt around:
 --       spine -> solved geometry -> branch semantics -> use-sites -> machine plan
---   - only render is currently frozen as a full canonical machine
---   - built-in query is still consumed directly by the pure reducer
+--   - only render is currently frozen as a full canonical installed machine
+--   - query is planned explicitly through `UiQueryPlan`, but still stops at the
+--     pure reducer instead of lowering to a backend-installed machine
 --
 -- The source-language modules below are copied from the proposal text so the
 -- repository keeps the concrete vocabulary of the redesign together with the
@@ -722,7 +723,8 @@ module UiIntent {
                | SelectAll()
                | Submit()
 
-    -- The issue proposal excerpt continues beyond this point; keep the
-    -- pipeline snapshot above as the authoritative new lower-half direction.
+    -- This snapshot stops here intentionally. The proposal text captured for
+    -- the repository focuses on the shared top/source vocabulary and the new
+    -- lower-half phase plan rather than a fully expanded reducer-output ASDL.
 }
 ]=]

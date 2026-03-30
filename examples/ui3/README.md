@@ -10,7 +10,7 @@ This directory is currently a scaffold with the first Layer-0 Terra leaf work st
 - benchmark entrypoints now load the project directly with `U.load_inspect_spec("examples/ui3")`
 - former installer modules are now routed through receiver-owned boundary files; `_old` modules remain only as parked migration references
 - `ui3_asdl_old.lua` remains in the tree as the old generated-string source and migration reference
-- `ui3_redesign_asdl_sketch.lua` preserves the older exploratory lower-half sketch
+- `ui3_redesign_asdl_sketch.lua` preserves the earlier `UiFlat / UiGeometryInput / UiRenderFacts / UiQueryFacts` exploratory sketch for comparison during redesign
 - `ui3_redesign_asdl_proposal.lua` captures the newer `UiSpine / UiMeasure / UiSolved` proposal snapshot
 - `backends/terra_layer0_unit.t` is the raw backend-facing Unit benchmark leaf
 - `ui3_layer0_bench.t` benchmarks Layer 0 directly
