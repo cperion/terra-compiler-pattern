@@ -37,6 +37,18 @@ The core architectural split is:
 
 `unit` mostly spans Layers 2 and 3.
 
+The canonical lower stack referenced throughout the framework is:
+
+```text
+transitions
+→ Machine IR
+→ canonical Machine
+→ backend lowering
+→ Unit runtime
+```
+
+`unit` participates most directly in the last three parts of that chain, while also providing the shared structural authoring vocabulary used to write transitions and machine-feeding phases.
+
 ---
 
 ## 2. Module map
@@ -63,6 +75,12 @@ Owns:
 - memo diagnostics
 - error collection helpers
 - ASDL helpers like `U.match` and `U.with`
+- explicit Machine descriptors above Unit packaging
+
+Important framing:
+
+- the structural/FP helpers in `unit_core.lua` are the authoring surface for the pure compiler layer
+- the Machine helpers are the canonical execution vocabulary immediately above backend Unit realization
 
 ### `unit_inspect_core.lua`
 Backend-independent schema inspection / reflection layer.
@@ -159,6 +177,16 @@ Where:
 
 The backend changes the representation of those two things, but not their meaning.
 
+But this is the end of the lower chain, not the beginning. The full canonical stack is:
+
+```text
+transitions
+→ Machine IR
+→ canonical Machine
+→ backend lowering
+→ Unit runtime
+```
+
 ### 4.1 Canonical machine
 
 Terminals should be designed around:
@@ -202,12 +230,21 @@ This is intentional current truth, not hidden behavior.
 
 These functions exist across both backends because both backends build on `unit_core.lua`.
 
+The key distinction in this API is:
+
+- **structural helpers** (`U.each`, `U.fold`, `U.map`, `U.match`, `U.with`, `U.errors`, ...) are for WRITING pure compiler passes
+- **Machine helpers** (`U.machine_step`, `U.machine_iter`, `U.machine_to_unit`) define what execution IS immediately above backend packaging
+
+So the functional surface remains first-class, but it is the compilation authoring language, not the deepest runtime ontology.
+
 ---
 
 ## 5.1 Iteration and traversal helpers
 
 These are specialized traversal helpers used heavily throughout the framework.
 They are preferred over LuaFun in framework internals.
+
+Their architectural role is compilation-side and structural: they are the surface vocabulary for pure transforms, reducers, projections, and machine construction. They are not by themselves the final runtime model of installed execution.
 
 ### `U.rawiter(obj, param?, state?)`
 Returns the raw `gen, param, state` triple for an iterable object.
@@ -279,6 +316,8 @@ Used heavily in inspection/schema code.
 ## 5.2 Machine helpers
 
 These helpers make the canonical machine layer explicit in `unit`.
+
+This is the point where the framework's semantic center shifts from structural authoring vocabulary to execution vocabulary.
 
 A `Machine` is the conceptual artifact immediately above `Unit`.
 It is not a generic runtime DSL. It is a small explicit description of executable shape:

@@ -20,12 +20,23 @@ Getting the ASDL right means getting the LANGUAGE right. A good language has:
 
 These are the same properties that make a PROGRAMMING LANGUAGE good. Because that's what the source ASDL is — a domain-specific programming language whose programs are domain artifacts (songs, documents, spreadsheets, games) and whose compiler produces executables that realize those artifacts.
 
-Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. But the most important product in the middle is not "a function." It is a MACHINE. More precisely:
+Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. But the most important product in the middle is not "a function." It is a MACHINE. More precisely, the canonical lower stack of the pattern is:
 
-- the source ASDL describes a domain program
-- the pure pipeline narrows that program into machine-feeding structure
-- the terminal defines the canonical machine: `gen`, `param`, `state`
-- backend realization packages that machine as `Unit { fn, state_t }`
+- **transitions**
+- **Machine IR**
+- **canonical Machine** (`gen`, `param`, `state`)
+- **backend lowering**
+- **Unit runtime** (`Unit { fn, state_t }`)
+
+Or stated as a flow:
+
+```text
+transitions
+→ Machine IR
+→ canonical Machine
+→ backend lowering
+→ Unit runtime
+```
 
 So the deeper statement is not just that the ASDL becomes code. It is that the ASDL becomes a machine, and `Unit` is how that machine is packaged for installation and execution on a backend.
 
@@ -146,10 +157,21 @@ A terminal is a pure, memoized boundary that takes a phase-local node and ultima
 
 This is where the architecture stops being purely descriptive and becomes operational. The terminal says: this part of the program is now concrete enough — here is the specialized machine that performs it, here is the stable input it reads, here is the runtime state it owns.
 
-The terminal should be understood in two layers:
+The terminal should be understood as the bottom of a canonical stack:
 
-1. It first defines the canonical machine: `gen` (the execution rule), `param` (stable machine input), `state` (mutable runtime-owned state)
-2. Backend realization then packages that machine as `Unit { fn, state_t }`
+```text
+transitions
+→ Machine IR
+→ canonical Machine
+→ backend lowering
+→ Unit runtime
+```
+
+At the terminal boundary specifically, that means:
+
+1. earlier transitions have already produced the right Machine IR
+2. the terminal defines the canonical machine: `gen` (the execution rule), `param` (stable machine input), `state` (mutable runtime-owned state)
+3. backend lowering then packages that machine as `Unit { fn, state_t }`
 
 This is not a minor explanatory refinement. It is the right terminal philosophy. The compiler's semantic product is the machine. `Unit` is the backend/runtime packaging of that machine.
 
@@ -281,9 +303,25 @@ Likewise, if the compilation level starts taking on too much runtime machinery: 
 
 The compilation level should be written in a recognizably structural style: `U.match`, `U.with`, `errs:each`, `errs:call`, ASDL constructors, small pure constructors, explicit error attachment. The goal is not to satisfy a functional-programming aesthetic. The goal is to ensure that phase boundaries behave like compiler passes: input structure in, output structure out, no hidden ambient dependence, no secret stateful side channels.
 
+This is also the right place to understand the framework's functional helpers correctly. Operations like `U.each`, `U.fold`, `U.map`, `U.find`, `U.match`, `U.with`, and structural error collection are the **authoring vocabulary of the compilation level**. They are the surface language for writing pure compiler passes. They are NOT the deepest runtime ontology of the architecture.
+
+That distinction matters. Functional structure is how you describe and transform typed programs. Machines are what eventually run. So the right slogan is:
+
+> **functional structure builds machines; machines become Units; Units run.**
+
+The functional API remains first-class, but in the right role: it is the language of the pure layer, not the final semantic model of execution.
+
 ### 3.6 Execution-level code
 
 Imperative code is not banned from the system. It is just supposed to live in the right place.
+
+At the execution level, the semantic center is no longer the functional helper vocabulary. It is the machine:
+
+- `gen` — what rule runs
+- `param` — what stable payload it reads
+- `state` — what mutable state it owns
+
+And below that, the backend packages the machine as a `Unit` suitable for installation and runtime calling conventions.
 
 Acceptable imperative behavior at the execution level: update filter delay elements in runtime state, increment frame counters, push pixels to a backend API, call SDL/GL/native APIs from installed code, mutate an allocated state struct during a callback.
 
@@ -394,13 +432,21 @@ The `Unit { fn, state_t }` is the packaged runtime artifact, but it is not the f
 - **param** — the stable machine input it reads
 - **state** — the mutable runtime-owned state it preserves
 
-So the bottom of the architecture is best understood as three layers, not one:
+So the bottom of the architecture is best understood as a canonical chain, not a single handoff:
 
-1. **Machine IR** — the typed machine-feeding layer that makes order, access, use-sites, resource identity, and runtime ownership explicit
-2. **Canonical machine** — `gen`, `param`, `state`
-3. **Unit** — backend/runtime packaging as `fn`, `state_t`
+1. **transitions** — pure boundaries that consume knowledge and produce the right lower typed forms
+2. **Machine IR** — the typed machine-feeding layer that makes order, access, use-sites, resource identity, and runtime ownership explicit
+3. **canonical Machine** — `gen`, `param`, `state`
+4. **backend lowering** — target-specific realization of that machine
+5. **Unit runtime** — installed runtime packaging as `Unit { fn, state_t }`
 
 This is not an optional explanatory trick. It is the right way to think about terminal design. The compiler's semantic product is the machine. The Unit is how that machine is installed, composed, swapped, and run on a particular backend.
+
+This also clarifies the role of the framework's older functional surface. The functional helper vocabulary is still essential, but its job is to BUILD and FEED machines, not to replace them as the semantic center. In other words:
+
+- **functional API** — the authoring surface for pure transitions, projections, reducers, and terminal construction
+- **Machine** — the canonical execution model
+- **Unit** — backend-specific installed realization of that machine
 
 Many terminal design mistakes come from compressing those three questions too early. A leaf may look awkward not because Unit is the wrong contract, but because the phase above it is not making gen, param, and state obvious enough.
 
@@ -1544,6 +1590,8 @@ Fix: split into two phases. Each boundary should do ONE kind of knowledge consum
 
 Every boundary function in the pattern is built from six primitives. That's the complete set.
 
+These primitives belong to the compilation-level authoring language. They are how you WRITE pure structural compiler passes. They should not be mistaken for the final runtime ontology. By the time execution begins, the result of all this structural work should be a machine narrow enough to run without rediscovering semantics.
+
 **`U.match(value, arms)`** — exhaustive dispatch on a sum type. Every variant must have a handler. Missing a variant is a compile-time error (from the ASDL, not the Lua runtime — `U.match` checks exhaustiveness).
 
 **`U.errors()`** — creates an error collector. Returns an object with `:each()`, `:call()`, `:merge()`, and `:get()`.
@@ -1560,7 +1608,7 @@ Two memoization wrappers declare the boundary's role in the pipeline:
 
 **`U.transition(name, fn)`** — a memoized phase transition. Takes a node from phase N, returns a node in phase N+1.
 
-**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, defines the canonical machine for that node, and returns its packaged `Unit { fn, state_t }` realization.
+**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, uses the pure structural authoring vocabulary to define the canonical machine for that node, and returns its packaged `Unit { fn, state_t }` realization.
 
 That's it. No other primitives are needed. If a boundary function reaches for something outside this set — a `for` loop, a `table.insert`, a mutable accumulator, a context argument, a sibling lookup — the ASDL is wrong.
 
@@ -2713,6 +2761,7 @@ Before writing any implementation, answer these questions about your source ASDL
 ```
 □ Each function is either deciding what machine should exist or being the machine
 □ Compilation-side code is pure, structural, memoized
+□ Functional helpers are treated as the authoring surface of the pure layer, not as the final runtime ontology
 □ Execution-side code is specialized, state-owning, operational
 □ No architecture-level reasoning happens in the execution layer
 □ Terminals are on the compilation side, even though they produce executable artifacts
@@ -2839,14 +2888,12 @@ STATE EVOLUTION
 THE TWO LEVELS
     compilation level decides the machine; execution level runs it
 
-THE PURE ARCHITECTURE
-    memoized transitions, Machine IR, terminals
-
-THE SEMANTIC COMPILE PRODUCT
-    canonical machine: gen, param, state
-
-THE PACKAGED RUNTIME ARTIFACT
-    Unit { fn, state_t }
+THE CANONICAL LOWER STACK
+    transitions
+    → Machine IR
+    → canonical machine: gen, param, state
+    → backend lowering
+    → Unit runtime: { fn, state_t }
 
 THE LIVE SYSTEM
     poll → apply → compile → execute
@@ -2861,6 +2908,10 @@ THE TERRA INSIGHT
 
 THE DEEPEST RULE
     the source ASDL is the architecture
+
+THE EXECUTION RULE
+    functional structure builds machines;
+    machines become Units; Units run
 ```
 
-> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software: the source ASDL describes a program whose meaning is progressively narrowed into machine-feeding structure, terminals define canonical machines, backends package those machines as Units, and execution runs the installed results until the source changes again. Terra is one especially powerful way to realize that architecture when explicit native control is worth the cost.
+> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software: the source ASDL describes a program whose meaning is progressively narrowed by transitions into Machine IR, then into a canonical machine, then through backend lowering into Unit runtime artifacts that execution runs until the source changes again. Terra is one especially powerful way to realize that architecture when explicit native control is worth the cost.

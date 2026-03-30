@@ -1,4 +1,4 @@
-# Terra Compiler Pattern
+# Compiler Pattern
 
 This repository models interactive software as a compiler:
 
@@ -6,8 +6,20 @@ This repository models interactive software as a compiler:
 - events are the input language
 - `apply` is the pure reducer
 - transitions narrow unresolved knowledge across phases
-- terminals compile phase-local ASDL into `Unit`
+- lower phases become Machine IR
+- terminals define canonical Machines
+- backend lowering realizes those Machines as Unit runtime artifacts
 - execution runs compiled artifacts until the source changes again
+
+The canonical lower stack is:
+
+```text
+transitions
+→ Machine IR
+→ canonical Machine
+→ backend lowering
+→ Unit runtime
+```
 
 The key discovery in this repository is that the pattern is **not actually Terra-specific**. Terra is one backend — a very strong one — for realizing specialized `Unit`s through LLVM. But the architecture itself is backend-neutral. In a JIT-native runtime like LuaJIT, much of the backend compiler is already present; the main task is to produce terminal code that is ultra-monomorphic and specialization-friendly.
 
@@ -20,9 +32,10 @@ The detailed design docs remain the source of truth:
 
 - `modeling-programs-as-compilers.md`
 - `docs/unit-api.md`
-- `terra-compiler-pattern.md`
 - `unit.t`
 - `AGENTS.md`
+
+The older Terra-focused rewrite draft has been removed. Its architectural content now belongs in `modeling-programs-as-compilers.md`.
 
 Additional backend notes:
 
@@ -43,6 +56,7 @@ The runtime vocabulary is now split into small layers.
 Backend-independent helpers:
 
 - canonical `gen / param / state` traversal helpers
+- structural/FP authoring helpers for the pure compiler layer
 - explicit `Machine` descriptors via:
   - `U.machine_step(...)`
   - `U.machine_iter(...)`
@@ -88,6 +102,18 @@ Both backends can host the same application architecture:
 - same view projection
 
 The backend only changes how `Unit`s are realized, installed, and executed.
+
+A useful framing for the repository is:
+
+- functional/structural helpers are the language for pure compiler passes
+- Machines are the semantic execution model
+- Units are backend-specific installed realizations of Machines
+- the canonical lower stack is:
+  - transitions
+  - Machine IR
+  - canonical Machine
+  - backend lowering
+  - Unit runtime
 
 ### LuaJIT backend
 

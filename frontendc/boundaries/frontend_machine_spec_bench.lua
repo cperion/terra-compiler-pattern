@@ -62,7 +62,7 @@ return function(T, U, P)
         local next_idx = 0
         local avg_ms = bench_avg_ms(iters, function()
             next_idx = next_idx + 1
-            return #target_ctx.TargetText.Spec.tokenize(input_pool[next_idx]).tokens
+            return #target_ctx.TargetText.Spec.tokenize(input_pool[next_idx]).items
         end)
         local mb_per_s = (#text / (1024 * 1024)) / (avg_ms / 1000)
         print(string.format(

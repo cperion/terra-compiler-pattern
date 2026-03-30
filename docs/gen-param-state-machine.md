@@ -104,6 +104,14 @@ That protocol is interesting here because it reveals a general machine pattern:
 
 That is exactly the kind of clarity terminal design needs.
 
+But the right conclusion is not that the functional iterator API becomes the deepest ontology of the framework. The better split is:
+
+- **functional / iterator helpers** remain the pure-layer authoring surface
+- **Machine** is the canonical execution model
+- **Unit** is backend-specific realization and installation
+
+So the framework keeps the old FP/iterator strengths, but in the right role.
+
 ---
 
 ## 4. The layer above `Unit`
