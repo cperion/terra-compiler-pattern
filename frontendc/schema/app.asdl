@@ -1,0 +1,372 @@
+module FrontendSource {
+
+    Spec = (
+        BoundaryTarget target,
+        Lexer lexer,
+        Parser parser
+    ) unique
+
+    BoundaryTarget = (
+        string tokenize_receiver_fqname,
+        string tokenize_verb,
+        string parse_receiver_fqname,
+        string parse_verb,
+        string token_phase_name,
+        string token_spec_ctor_fqname,
+        string source_spec_ctor_fqname
+    ) unique
+
+    Lexer = (
+        SkipRule* skips,
+        TokenDef* tokens
+    ) unique
+
+    SkipRule
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+
+    TokenDef
+        = KeywordToken(string name, string text)
+        | PunctToken(string name, string text)
+        | IdentToken(string name, CharSet start_set, CharSet continue_set)
+
+    CharSet
+        = AsciiLetters()
+        | AsciiDigits()
+        | Underscore()
+        | Union(CharSet* parts)
+
+    Parser = (
+        string entry_rule_name,
+        Rule* rules
+    ) unique
+
+    Rule = (
+        string name,
+        Expr expr,
+        Result result
+    ) unique
+
+    Expr
+        = TokenRef(string token_name)
+        | RuleRef(string rule_name)
+        | Seq(Expr* items)
+        | Choice(Expr* alts)
+        | Optional(Expr inner)
+        | Many(Expr inner)
+        | OneOrMore(Expr inner)
+        | Capture(string capture_name, Expr inner)
+
+    Result
+        = ReturnCtor(string ctor_fqname, FieldResult* fields)
+        | ReturnCapture(string capture_name)
+        | ReturnEmpty()
+
+    FieldResult = (
+        string field_name,
+        ResultSource source
+    ) unique
+
+    ResultSource
+        = CaptureSource(string capture_name)
+        | PresentSource(string capture_name)
+        | JoinedListSource(string capture_name, string separator)
+        | ConstBoolSource(boolean value)
+}
+
+module FrontendChecked {
+
+    Spec = (
+        FrontendSource.BoundaryTarget target,
+        Lexer lexer,
+        Parser parser
+    ) unique
+
+    Lexer = (
+        TokenDef* tokens,
+        SkipRule* skips
+    ) unique
+
+    TokenDef
+        = KeywordToken(TokenHeader header, string text)
+        | PunctToken(TokenHeader header, string text)
+        | IdentToken(TokenHeader header, FrontendSource.CharSet start_set, FrontendSource.CharSet continue_set)
+
+    SkipRule
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+
+    TokenHeader = (
+        string name,
+        number token_id,
+        TokenValueShape value_shape
+    ) unique
+
+    TokenValueShape
+        = NoValue()
+        | StringValue()
+
+    Parser = (
+        RuleHeader entry_rule,
+        Rule* rules
+    ) unique
+
+    Rule = (
+        RuleHeader header,
+        CheckedExpr expr,
+        CheckedResult result,
+        FirstSet first_set,
+        boolean nullable
+    ) unique
+
+    RuleHeader = (
+        string name,
+        number rule_id
+    ) unique
+
+    CheckedExpr
+        = TokenRef(TokenHeader header)
+        | RuleRef(RuleHeader header)
+        | Seq(CheckedExpr* items)
+        | Choice(CheckedExpr* alts)
+        | Optional(CheckedExpr inner)
+        | Many(CheckedExpr inner)
+        | OneOrMore(CheckedExpr inner)
+        | Capture(CaptureHeader header, CheckedExpr inner)
+
+    CaptureHeader = (
+        string name,
+        number slot_id,
+        CaptureShape shape
+    ) unique
+
+    CaptureShape
+        = SingleCapture()
+        | ListCapture()
+        | PresenceCapture()
+
+    CheckedResult
+        = ReturnCtor(CtorTarget ctor, FieldResult* fields)
+        | ReturnCapture(CaptureHeader header)
+        | ReturnEmpty()
+
+    CtorTarget = (
+        string ctor_fqname,
+        TargetField* fields
+    ) unique
+
+    TargetField = (
+        string field_name,
+        ValueShape expected_shape
+    ) unique
+
+    FieldResult = (
+        TargetField field,
+        ResultSource source
+    ) unique
+
+    ResultSource
+        = CaptureSource(CaptureHeader header)
+        | PresentSource(CaptureHeader header)
+        | JoinedListSource(CaptureHeader header, string separator)
+        | ConstBoolSource(boolean value)
+
+    ValueShape
+        = NodeValue()
+        | ListValue()
+        | StringValue()
+        | BoolValue()
+
+    FirstSet = (
+        number* token_ids,
+        boolean eof_ok
+    ) unique
+}
+
+module FrontendLowered {
+
+    Spec = (
+        FrontendSource.BoundaryTarget target,
+        Tokenizer tokenizer,
+        Parser parser
+    ) unique
+
+    Tokenizer = (
+        SkipPlan* skips,
+        TokenPlan* tokens
+    ) unique
+
+    SkipPlan
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+
+    TokenPlan
+        = FixedToken(
+            FrontendChecked.TokenHeader header,
+            string text
+        )
+        | IdentToken(
+            FrontendChecked.TokenHeader header,
+            FrontendSource.CharSet start_set,
+            FrontendSource.CharSet continue_set
+        )
+
+    Parser = (
+        FrontendChecked.RuleHeader entry_rule,
+        RulePlan* rules
+    ) unique
+
+    RulePlan = (
+        FrontendChecked.RuleHeader header,
+        ParseOp* ops,
+        ResultPlan result
+    ) unique
+
+    ParseOp
+        = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
+        | CallRule(FrontendChecked.RuleHeader header, number capture_slot)
+        | Branch(BranchArm* arms, boolean eof_ok)
+        | OptionalIfFirst(FrontendChecked.TokenHeader* first_set, ParseOp* ops)
+        | RepeatWhileFirst(FrontendChecked.TokenHeader* first_set, ParseOp* ops)
+        | BeginSeq()
+        | EndSeq()
+
+    BranchArm = (
+        FrontendChecked.TokenHeader* first_set,
+        ParseOp* ops
+    ) unique
+
+    ResultPlan
+        = ReturnCtor(FrontendChecked.CtorTarget ctor, FieldPlan* fields)
+        | ReturnSlot(number slot_id)
+        | ReturnEmpty()
+
+    FieldPlan = (
+        string field_name,
+        SlotSource source
+    ) unique
+
+    SlotSource
+        = ReadSlot(number slot_id)
+        | ReadPresent(number slot_id)
+        | ReadJoined(number slot_id, string separator)
+        | ReadConstBool(boolean value)
+}
+
+module FrontendMachine {
+
+    Spec = (
+        TokenizeBoundary tokenize,
+        ParseBoundary parse
+    ) unique
+
+    Path = (
+        string* parts
+    ) unique
+
+    BoundaryHeader = (
+        Path receiver_path,
+        string verb
+    ) unique
+
+    CtorRef = (
+        number ctor_id,
+        Path ctor_path
+    ) unique
+
+    FixedDispatch = (
+        number first_byte,
+        FixedCase* cases
+    ) unique
+
+    FixedCase = (
+        string text,
+        FrontendChecked.TokenHeader header,
+        boolean requires_word_boundary
+    ) unique
+
+    IdentDispatch = (
+        FrontendChecked.TokenHeader header,
+        number* start_bitset_words,
+        number* continue_bitset_words
+    ) unique
+
+    FirstSetTable = (
+        number set_id,
+        number* bitset_words
+    ) unique
+
+    TokenizeBoundary = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        Path span_ctor_path,
+        CtorRef* token_ctors,
+        number eof_ctor_id,
+        FrontendLowered.SkipPlan* skips,
+        FixedDispatch* fixed_dispatches,
+        IdentDispatch* ident_dispatches
+    ) unique
+
+    ParseBoundary = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        CtorRef* result_ctors,
+        FirstSetTable* first_sets,
+        RuleClosurePlan* rules,
+        number entry_rule_id
+    ) unique
+
+    RuleClosurePlan
+        = TokenRule(
+            number rule_id,
+            FrontendChecked.TokenHeader header,
+            number capture_slot,
+            ResultPlan result
+        )
+        | SeqRule(
+            number rule_id,
+            Step* steps,
+            ResultPlan result
+        )
+        | ChoiceRule(
+            number rule_id,
+            ChoiceArm* arms,
+            ResultPlan result
+        )
+
+    ChoiceArm = (
+        number set_id,
+        Step* steps
+    ) unique
+
+    Step
+        = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
+        | CallRule(number rule_id, number capture_slot)
+        | OptionalGroup(number set_id, Step* steps)
+        | RepeatGroup(number set_id, Step* steps)
+
+    ResultPlan
+        = ReturnCtor(number ctor_id, ArgSource* args)
+        | ReturnSlot(number slot_id)
+        | ReturnEmpty()
+
+    ArgSource
+        = ReadSlot(number slot_id)
+        | ReadPresent(number slot_id)
+        | ReadJoined(number slot_id, string separator)
+        | ReadConstBool(boolean value)
+}
+
+module FrontendLua {
+
+    Spec = (
+        BoundaryFile* files
+    ) unique
+
+    BoundaryFile = (
+        string path,
+        string receiver_fqname,
+        string verb,
+        string lua_source
+    ) unique
+}

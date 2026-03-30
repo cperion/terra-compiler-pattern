@@ -127,6 +127,40 @@ local function test_with_reconstructs()
     assert(getmetatable(p2) == Point)
 end
 
+local function test_machine_step_and_iter_helpers()
+    local step = U.machine_step(function(param, state, x)
+        state.calls = (state.calls or 0) + 1
+        return x + param.offset
+    end, { offset = 3 }, nil, "adder")
+
+    assert(U.is_machine(step))
+    assert(step.shape == "step")
+    assert(step.family == "adder")
+    assert(U.machine_run(step, { calls = 0 }, 4) == 7)
+
+    local iter = U.machine_iter(function(param, state, cursor, limit)
+        if cursor > limit then return nil end
+        state.count = (state.count or 0) + 1
+        return cursor + 1, cursor * param.scale
+    end, 1, { scale = 2 }, nil, "scaled_range")
+
+    assert(U.is_machine(iter))
+    assert(iter.shape == "iter")
+    assert(iter.family == "scaled_range")
+
+    local runtime_state = { count = 0 }
+    local values = U.map(U.machine_iterate(iter, runtime_state, 4), function(x)
+        return x
+    end)
+
+    assert(#values == 4)
+    assert(values[1] == 2)
+    assert(values[2] == 4)
+    assert(values[3] == 6)
+    assert(values[4] == 8)
+    assert(runtime_state.count == 4)
+end
+
 local function test_memo_inspector()
     local f = U.memoize("double", function(x)
         return x * 2
@@ -190,6 +224,7 @@ test_memoize_identity()
 test_with_fallback_and_with_errors()
 test_match_exhaustive()
 test_with_reconstructs()
+test_machine_step_and_iter_helpers()
 test_memo_inspector()
 test_errors_merge_and_call()
 

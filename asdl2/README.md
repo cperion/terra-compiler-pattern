@@ -15,7 +15,8 @@ asdl2/
   pipeline.lua                            # phase order
   unit_project.lua                        # project config
   boundaries/
-    asdl2_text_spec.lua                   # Asdl2Text.Spec:parse()
+    asdl2_text_spec.lua                   # Asdl2Text.Spec:tokenize()
+    asdl2_token_spec.lua                  # Asdl2Token.Spec:parse()
     asdl2_source_spec.lua                 # Asdl2Source.Spec:catalog()
     asdl2_catalog_spec.lua                # Asdl2Catalog.Spec:classify_lower()
     asdl2_lowered_schema.lua              # Asdl2Lowered.Schema:define_machine()
@@ -35,15 +36,16 @@ asdl2/
 ## Main path
 
 ```text
-Asdl2Text -> Asdl2Source -> Asdl2Catalog -> Asdl2Lowered -> Asdl2Machine -> Asdl2LuaJIT -> install
+Asdl2Text -> Asdl2Token -> Asdl2Source -> Asdl2Catalog -> Asdl2Lowered -> Asdl2Machine -> Asdl2LuaJIT -> install
 ```
 
-1. `Asdl2Text.Spec:parse()` → `Asdl2Source.Spec`
-2. `Asdl2Source.Spec:catalog()` → `Asdl2Catalog.Spec`
-3. `Asdl2Catalog.Spec:classify_lower()` → `Asdl2Lowered.Schema`
-4. `Asdl2Lowered.Schema:define_machine()` → `Asdl2Machine.Schema`
-5. `Asdl2Machine.Schema:lower_luajit()` → `Asdl2LuaJIT.Schema`
-6. `Asdl2LuaJIT.Schema:install(ctx)` → Context
+1. `Asdl2Text.Spec:tokenize()` → `Asdl2Token.Spec`
+2. `Asdl2Token.Spec:parse()` → `Asdl2Source.Spec`
+3. `Asdl2Source.Spec:catalog()` → `Asdl2Catalog.Spec`
+4. `Asdl2Catalog.Spec:classify_lower()` → `Asdl2Lowered.Schema`
+5. `Asdl2Lowered.Schema:define_machine()` → `Asdl2Machine.Schema`
+6. `Asdl2Machine.Schema:lower_luajit()` → `Asdl2LuaJIT.Schema`
+7. `Asdl2LuaJIT.Schema:install(ctx)` → Context
 
 ---
 
@@ -65,6 +67,12 @@ luajit unit.lua scaffold-file asdl2 Asdl2Text.Spec
 
 ### `Asdl2Text`
 Owns raw authored text.
+
+### `Asdl2Token`
+Owns the token language:
+- typed token stream
+- punctuation/keyword/identifier distinction
+- token byte spans
 
 ### `Asdl2Source`
 Owns only the authored language:

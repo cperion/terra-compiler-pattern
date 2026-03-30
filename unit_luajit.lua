@@ -158,6 +158,28 @@ function U.leaf(state_t, fn)
     return U.new(fn, state_t or U.EMPTY)
 end
 
+function U.machine_to_unit(machine)
+    if not U.is_machine(machine) then
+        error("U.machine_to_unit: expected a Machine", 2)
+    end
+
+    local state_t = machine.state_t or U.EMPTY
+
+    if machine.shape == "step" then
+        return U.new(function(state, ...)
+            return U.machine_run(machine, state, ...)
+        end, state_t)
+    end
+
+    if machine.shape == "iter" then
+        return U.new(function(state, ...)
+            return U.machine_iterate(machine, state, ...)
+        end, state_t)
+    end
+
+    error("U.machine_to_unit: unknown machine shape '" .. tostring(machine.shape) .. "'", 2)
+end
+
 local function compose_children(children)
     local kids = U.map(children, function(child)
         local child_state_t = child.state_t or U.EMPTY

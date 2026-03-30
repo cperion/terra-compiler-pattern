@@ -2023,9 +2023,252 @@ return Boot.build({
             },
             sums = {},
         },
+        Asdl2Token = {
+            records = {
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "AttributesKw",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Bar",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Comma",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Dot",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Eof",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Eq",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "text",
+                            optional = false,
+                            type = "string",
+                        },
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "Ident",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "LBrace",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "LParen",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "ManyMark",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "ModuleKw",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "OptionalMark",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "RBrace",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "RParen",
+                    unique = false,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "start_byte",
+                            optional = false,
+                            type = "number",
+                        },
+                        {
+                            list = false,
+                            name = "end_byte",
+                            optional = false,
+                            type = "number",
+                        },
+                    },
+                    name = "Span",
+                    unique = true,
+                },
+                {
+                    fields = {
+                        {
+                            list = true,
+                            name = "tokens",
+                            optional = false,
+                            type = "Token",
+                        },
+                    },
+                    name = "Spec",
+                    unique = true,
+                },
+                {
+                    fields = {
+                        {
+                            list = false,
+                            name = "span",
+                            optional = false,
+                            type = "Span",
+                        },
+                    },
+                    name = "UniqueKw",
+                    unique = false,
+                },
+            },
+            sums = {
+                {
+                    name = "Token",
+                    variants = {
+                        "Ident",
+                        "ModuleKw",
+                        "AttributesKw",
+                        "UniqueKw",
+                        "Eq",
+                        "Bar",
+                        "OptionalMark",
+                        "ManyMark",
+                        "Comma",
+                        "LParen",
+                        "RParen",
+                        "LBrace",
+                        "RBrace",
+                        "Dot",
+                        "Eof",
+                    },
+                },
+            },
+        },
     },
     pipeline = {
         "Asdl2Text",
+        "Asdl2Token",
         "Asdl2Source",
         "Asdl2Catalog",
         "Asdl2Lowered",

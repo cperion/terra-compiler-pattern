@@ -20,7 +20,14 @@ Getting the ASDL right means getting the LANGUAGE right. A good language has:
 
 These are the same properties that make a PROGRAMMING LANGUAGE good. Because that's what the source ASDL is — a domain-specific programming language whose programs are domain artifacts (songs, documents, spreadsheets, games) and whose compiler produces executables that realize those artifacts.
 
-Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. The Unit is the object code.
+Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. But the most important product in the middle is not "a function." It is a MACHINE. More precisely:
+
+- the source ASDL describes a domain program
+- the pure pipeline narrows that program into machine-feeding structure
+- the terminal defines the canonical machine: `gen`, `param`, `state`
+- backend realization packages that machine as `Unit { fn, state_t }`
+
+So the deeper statement is not just that the ASDL becomes code. It is that the ASDL becomes a machine, and `Unit` is how that machine is packaged for installation and execution on a backend.
 
 And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, and the same transitions can realize Terra/LLVM native code, LuaJIT-specialized closures, JavaScript, or WASM. Only the leaf compilation — the terminal boundary where ASDL becomes executable machinery — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
 
@@ -35,6 +42,8 @@ Between intent and execution, there is a GAP. The user thinks in domain concepts
 Traditional programs bridge the gap at runtime, every frame, with dispatch tables, virtual calls, config lookups, and state machines. They are INTERPRETERS — they re-answer "what should I do?" every cycle.
 
 The compiler pattern bridges the gap at edit time, once, by COMPILING the user's intent into a specialized executable machine. On Terra that may be explicit native code. On LuaJIT it may be a highly specialized closure and state layout that the host JIT compiles aggressively. The compiled result runs until the intent changes. When it changes, the compiler runs again (incrementally — only the changed subtree).
+
+That wording matters. The terminal is not best understood as merely "returning a function." It is better understood as defining the machine the runtime should host. Backend packaging then gives that machine a calling convention, state layout, lifecycle, and installation story.
 
 ### 1.3 The gap has layers
 
@@ -133,7 +142,7 @@ A transition is not just "another pass." It is a point where ambiguity is reduce
 
 ### 2.5 Terminals
 
-A terminal is a pure, memoized boundary that takes a phase-local node and produces an executable `Unit`.
+A terminal is a pure, memoized boundary that takes a phase-local node and ultimately produces an executable `Unit`.
 
 This is where the architecture stops being purely descriptive and becomes operational. The terminal says: this part of the program is now concrete enough — here is the specialized machine that performs it, here is the stable input it reads, here is the runtime state it owns.
 
@@ -142,17 +151,19 @@ The terminal should be understood in two layers:
 1. It first defines the canonical machine: `gen` (the execution rule), `param` (stable machine input), `state` (mutable runtime-owned state)
 2. Backend realization then packages that machine as `Unit { fn, state_t }`
 
+This is not a minor explanatory refinement. It is the right terminal philosophy. The compiler's semantic product is the machine. `Unit` is the backend/runtime packaging of that machine.
+
 Depending on backend, this may mean a quoted Terra function + Terra struct type, a specialized Lua closure + FFI-backed state representation, or some other target-specific executable product.
 
 ### 2.6 Unit
 
-A `Unit` is the compile product. Conceptually: executable behavior paired with owned runtime state layout.
+A `Unit` is the packaged runtime artifact for a compiled machine. Conceptually: executable behavior paired with owned runtime state layout.
 
 ```
 Unit { fn, state_t }
 ```
 
-The exact representation varies by backend, but the role is stable: the Unit is the specialized machine the compiler produced for that subtree of the program. Units compose structurally — the same way the source tree composes structurally. Parent Units own child state. Composition is structural, not a separate architecture.
+The exact representation varies by backend, but the role is stable: the Unit packages a machine for installation, composition, hot swap, and execution on a particular backend. Units compose structurally — the same way the source tree composes structurally. Parent Units own child state. Composition is structural, not a separate architecture.
 
 ### 2.7 The live loop
 
@@ -168,7 +179,7 @@ poll → apply → compile → execute
 
 **compile** — Re-run the memoized transitions and terminals. Because boundaries are pure and nodes preserve structural identity where possible, only the changed parts need to be recomputed. This is incremental compilation as a direct consequence of architecture, not a bolt-on subsystem.
 
-**execute** — Run the currently realized Units. That may mean: call the audio callback, draw the frame, answer hit tests, advance a simulation step. The execution layer should not be re-deciding architecture-level questions. It should be running the machine that the compiler has already specialized.
+**execute** — Run the currently realized Units. That may mean: call the audio callback, draw the frame, answer hit tests, advance a simulation step. The execution layer should not be re-deciding architecture-level questions. It should be running the machine that the compiler has already specialized, with `Unit` serving only as the installed packaging of that machine.
 
 ### 2.8 Hot swap is the natural execution story
 
@@ -176,7 +187,7 @@ The live loop makes hot swap a natural operation rather than a special subsystem
 
 - the previous source program compiled to some installed Units
 - a new event changes the source
-- affected subtrees recompile to new Units
+- affected subtrees recompile to new machines and freshly packaged Units
 - the runtime installs or swaps those Units
 - execution continues using the new machine
 
@@ -233,10 +244,11 @@ The compilation level is where the system reasons about the user's program. It i
 - terminals
 - structural error collection
 - inspection derived from the modeled program
+- the typed Machine IRs and terminal inputs that make machine construction obvious
 
 Its characteristic properties are: pure, structural, memoized at stage boundaries, testable by constructor + assertion, driven by modeled data rather than ambient context.
 
-This is the level where questions get answered: which variant is this really? Which IDs resolve to what? Which defaults apply? What layout should be produced? What specialized leaf machine should be emitted for this subtree?
+This is the level where questions get answered: which variant is this really? Which IDs resolve to what? Which defaults apply? What layout should be produced? What machine should exist for this subtree? What specialized leaf machine should be emitted for it?
 
 ### 3.2 The execution level
 
@@ -247,10 +259,11 @@ The execution level is where the machine actually runs. It includes:
 - a callback invoked by SDL or an audio driver
 - a hit-test routine answering geometry queries
 - a draw routine traversing already-lowered batches
+- the runtime packaging and calling conventions that host installed machines as Units
 
 Its characteristic properties are different: it may be imperative internally, it mutates only its owned runtime state, it should not be rediscovering high-level domain semantics, and it should be specialized enough that dynamic architectural reasoning has already been consumed.
 
-The execution level is not where the app decides what exists. It is where the compiled artifact does the work it has already been specialized to do.
+The execution level is not where the app decides what exists. It is where the compiled artifact does the work it has already been specialized to do. The machine is the semantic executable abstraction; the Unit is the backend/runtime container that hosts it.
 
 ### 3.3 Why this split matters
 
@@ -262,7 +275,7 @@ Likewise, if the compilation level starts taking on too much runtime machinery: 
 
 ### 3.4 The slogan
 
-> **The compilation level decides. The execution level runs.**
+> **The compilation level decides the machine. The execution level runs it.**
 
 ### 3.5 Compilation-level code
 
@@ -294,7 +307,7 @@ What is not acceptable is smuggling architecture-level reasoning into that imper
 
 ### 3.8 Terminals are on the compilation side
 
-Even though terminals produce executable artifacts, terminals themselves are still part of the compilation level. A terminal is a pure function from phase-local data to a Unit. The terminal should remain structural and testable. Backend API details should be encapsulated in the produced Unit, not leaked into the terminal's semantic input model.
+Even though terminals produce executable artifacts, terminals themselves are still part of the compilation level. A terminal is a pure function from phase-local data to a machine, and then to a packaged Unit. The terminal should remain structural and testable. Backend API details should be encapsulated in the produced Unit, not leaked into the terminal's semantic input model.
 
 ### 3.9 Error handling differs by level
 
@@ -318,26 +331,26 @@ The compilation level is where most of the application's meaning lives: modeled 
 
 ---
 
-## Part 4: Unit — The Compile Product
+## Part 4: Unit — The Packaged Runtime Artifact
 
 ### 4.1 What a Unit is
 
-A `Unit` is the compiled machine for a subtree of the source program. It pairs specialized behavior with the runtime state layout that behavior owns.
+A `Unit` is the packaged runtime artifact for a compiled machine for a subtree of the source program. It pairs specialized behavior with the runtime state layout that behavior owns.
 
 ```
 Unit { fn, state_t }
 ```
 
-- `fn` describes behavior — the executable code
+- `fn` describes realized behavior — the executable code under this backend's calling convention
 - `state_t` describes owned runtime state — the layout the code operates on
 
-The compilation level chooses this pairing. The execution level operates on it.
+The compilation level decides the machine that should exist. Backend realization packages that machine as a Unit. The execution level operates on the packaged result.
 
 ### 4.2 Why Unit is better than "just a function"
 
 A plain function does not necessarily tell you what runtime state it owns, how that state should be allocated, how child state composes into parent state, what the lifecycle of that state is, or how hot swap should treat state compatibility.
 
-The Unit concept is richer because it keeps the state ABI and the executable behavior coupled. That is especially important in a system built around repeated recompilation. If the compiled artifact changes, the state ownership model may change too, and the architecture should represent that explicitly.
+The Unit concept is richer because it keeps the runtime packaging, state ABI, and executable behavior coupled. That is especially important in a system built around repeated recompilation. If the compiled artifact changes, the state ownership model may change too, and the architecture should represent that explicitly. But it is equally important to remember that Unit is still not the first machine concept. The semantic machine exists one layer above: `gen`, `param`, `state`.
 
 ### 4.3 Why Unit is better than codegen plus external runtime objects
 
@@ -381,11 +394,19 @@ The `Unit { fn, state_t }` is the packaged runtime artifact, but it is not the f
 - **param** — the stable machine input it reads
 - **state** — the mutable runtime-owned state it preserves
 
-This is not an optional explanatory trick. It is the right way to think about terminal design. Many terminal design mistakes come from compressing those three questions too early. A leaf may look awkward not because Unit is the wrong contract, but because the phase above it is not making gen, param, and state obvious enough.
+So the bottom of the architecture is best understood as three layers, not one:
+
+1. **Machine IR** — the typed machine-feeding layer that makes order, access, use-sites, resource identity, and runtime ownership explicit
+2. **Canonical machine** — `gen`, `param`, `state`
+3. **Unit** — backend/runtime packaging as `fn`, `state_t`
+
+This is not an optional explanatory trick. It is the right way to think about terminal design. The compiler's semantic product is the machine. The Unit is how that machine is installed, composed, swapped, and run on a particular backend.
+
+Many terminal design mistakes come from compressing those three questions too early. A leaf may look awkward not because Unit is the wrong contract, but because the phase above it is not making gen, param, and state obvious enough.
 
 ### 4.7 Machine IR
 
-A good Machine IR above the canonical machine is the **typed machine-feeding layer** that makes the machine's compiled wiring explicit. It should answer five things directly:
+A good Machine IR above the canonical machine is the **typed machine-feeding layer** that makes the machine's compiled wiring explicit. The machine is the real semantic executable abstraction; Machine IR exists to make that machine trivial to derive; Unit then packages it for runtime. Machine IR should answer five things directly:
 
 1. **Order** — what loops exist? What spans or ranges are executed? What headers determine one execution slice?
 
@@ -1539,7 +1560,7 @@ Two memoization wrappers declare the boundary's role in the pipeline:
 
 **`U.transition(name, fn)`** — a memoized phase transition. Takes a node from phase N, returns a node in phase N+1.
 
-**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, returns a `Unit { fn, state_t }`.
+**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, defines the canonical machine for that node, and returns its packaged `Unit { fn, state_t }` realization.
 
 That's it. No other primitives are needed. If a boundary function reaches for something outside this set — a `for` loop, a `table.insert`, a mutable accumulator, a context argument, a sibling lookup — the ASDL is wrong.
 
@@ -1642,7 +1663,7 @@ The modeling method (Part 2) gives you a first draft of the ASDL. That draft is 
 
 #### Write the leaf you want to write
 
-Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one phase-local node and produces a `Unit` for the machine. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
+Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one phase-local node, defines the machine you want, and produces the packaged `Unit` for it. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
 
 This is not a trick for implementation. It is the core design method.
 
@@ -2075,7 +2096,7 @@ This architecture was historically called the Terra Compiler Pattern because Ter
 
 But the deeper discovery is: **the pattern is not fundamentally about Terra.**
 
-The pattern is: the user is editing a program in a domain language, that program is represented as source ASDL, input is represented as Event ASDL, state changes are modeled by a pure Apply reducer, unresolved knowledge is consumed across real phases, phase-local structures are realized as specialized executable Units, and execution runs those Units until the source changes again.
+The pattern is: the user is editing a program in a domain language, that program is represented as source ASDL, input is represented as Event ASDL, state changes are modeled by a pure Apply reducer, unresolved knowledge is consumed across real phases, lower phases become machine-feeding structures, terminals define canonical machines, backends package those machines as executable Units, and execution runs those Units until the source changes again.
 
 None of that requires Terra specifically. Terra is one way to realize the backend step — a very strong one — but still just one backend.
 
@@ -2097,8 +2118,8 @@ The architecture has three layers:
 ├───────────────────────────────────────────────┤
 │               THE PATTERN                     │
 │                                               │
-│  Unit, gen/param/state, transition,           │
-│  terminal, memoize, match, with,              │
+│  Machine IR, Unit, gen/param/state,           │
+│  transition, terminal, memoize, match, with, │
 │  fallback, errors, inspect                    │
 │                                               │
 │  This is the compiler architecture vocabulary │
@@ -2116,7 +2137,7 @@ The architecture has three layers:
 
 **Layer 1: Domain** — The application's actual semantic content. Source ASDL, Event ASDL, Apply, the real phases, projections, Machine IRs, terminal inputs. This is where questions like "what is a track?" and "what should save/load preserve?" live. This layer is not backend-specific.
 
-**Layer 2: Pattern** — The reusable compiler vocabulary. Unit, transition, terminal, memoize, match, with, errors, inspect. This layer is not the app's semantics, but it gives the app a disciplined way to express them.
+**Layer 2: Pattern** — The reusable compiler vocabulary. Machine IR thinking, canonical `gen/param/state` machine thinking, Unit, transition, terminal, memoize, match, with, errors, inspect. This layer is not the app's semantics, but it gives the app a disciplined way to express them.
 
 **Layer 3: Backend** — How a leaf becomes executable code on this target. How runtime state is represented. How Units are installed and swapped. How external drivers are called. This is where Terra and LuaJIT differ.
 
@@ -2699,7 +2720,8 @@ Before writing any implementation, answer these questions about your source ASDL
 
 ### 14.11 Unit design
 ```
-□ Each terminal produces a Unit { fn, state_t }
+□ Each terminal's semantic product is a machine, not merely an ad hoc function
+□ Each terminal produces a packaged Unit { fn, state_t }
 □ state_t contains only execution-time mutable data, not authored choices
 □ Bake/live split is explicit: compile-time-known → baked, runtime-mutable → state_t
 □ The canonical machine (gen/param/state) is clear before packaging as Unit
@@ -2783,7 +2805,7 @@ THE MODELING METHOD
     Own phase pipeline to GPU.
 
 11. IMPLEMENT LEAVES-UP
-    Start at the leaf compiler. Write the function you want to write.
+    Start at the leaf compiler. Write the machine you want to install.
     The leaf tells you what the ASDL must provide.
     Fix the layer above. Recurse upward to the source ASDL.
     Every boundary is a pure structural transform. If it resists — fix the ASDL.
@@ -2815,13 +2837,16 @@ STATE EVOLUTION
     Apply : (state, event) → state
 
 THE TWO LEVELS
-    compilation level decides; execution level runs
+    compilation level decides the machine; execution level runs it
 
 THE PURE ARCHITECTURE
-    memoized transitions and terminals
+    memoized transitions, Machine IR, terminals
 
-THE COMPILE PRODUCT
-    Unit { behavior, state ownership }
+THE SEMANTIC COMPILE PRODUCT
+    canonical machine: gen, param, state
+
+THE PACKAGED RUNTIME ARTIFACT
+    Unit { fn, state_t }
 
 THE LIVE SYSTEM
     poll → apply → compile → execute
@@ -2838,4 +2863,4 @@ THE DEEPEST RULE
     the source ASDL is the architecture
 ```
 
-> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software, and Terra is one especially powerful way to realize it when explicit native control is worth the cost.
+> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software: the source ASDL describes a program whose meaning is progressively narrowed into machine-feeding structure, terminals define canonical machines, backends package those machines as Units, and execution runs the installed results until the source changes again. Terra is one especially powerful way to realize that architecture when explicit native control is worth the cost.

@@ -103,6 +103,93 @@ function M.new()
         return wrap(gen, param, state)
     end
 
+    local function is_machine(value)
+        return type_fn(value) == "table"
+            and rawget_fn(value, "__unit_machine") == true
+            and (rawget_fn(value, "shape") == "step" or rawget_fn(value, "shape") == "iter")
+    end
+
+    function U.is_machine(value)
+        return is_machine(value)
+    end
+
+    function U.machine_step(run, param, state_t, family)
+        if type_fn(run) ~= "function" then
+            error("U.machine_step: run must be a function", 2)
+        end
+
+        return {
+            __unit_machine = true,
+            shape = "step",
+            family = family or "step",
+            run = run,
+            param = param,
+            state_t = state_t,
+        }
+    end
+
+    function U.machine_iter(next_fn, init_cursor, param, state_t, family)
+        if type_fn(next_fn) ~= "function" then
+            error("U.machine_iter: next_fn must be a function", 2)
+        end
+
+        return {
+            __unit_machine = true,
+            shape = "iter",
+            family = family or "iter",
+            next = next_fn,
+            init_cursor = init_cursor,
+            param = param,
+            state_t = state_t,
+        }
+    end
+
+    function U.machine_run(machine, runtime_state, ...)
+        if not is_machine(machine) then
+            error("U.machine_run: expected a Machine", 2)
+        end
+        if machine.shape ~= "step" then
+            error("U.machine_run: expected a step Machine", 2)
+        end
+        return machine.run(machine.param, runtime_state, ...)
+    end
+
+    function U.machine_iterate(machine, runtime_state, ...)
+        if not is_machine(machine) then
+            error("U.machine_iterate: expected a Machine", 2)
+        end
+        if machine.shape ~= "iter" then
+            error("U.machine_iterate: expected an iter Machine", 2)
+        end
+
+        local args = pack_fn(...)
+        local init = machine.init_cursor
+        local cursor = type_fn(init) == "function"
+            and init(machine.param, runtime_state, unpack_fn(args, 1, args.n))
+            or init
+
+        return wrap(function(bound, state)
+            return bound.next(
+                bound.param,
+                bound.runtime_state,
+                state,
+                unpack_fn(bound.args, 1, bound.args.n)
+            )
+        end, {
+            next = machine.next,
+            param = machine.param,
+            runtime_state = runtime_state,
+            args = args,
+        }, cursor)
+    end
+
+    function U.machine_to_unit(machine)
+        if not is_machine(machine) then
+            error("U.machine_to_unit: expected a Machine", 2)
+        end
+        error("U.machine_to_unit: current backend does not implement explicit Machine realization", 2)
+    end
+
     U.rawiter = rawiter
 
     function U.each(xs, fn)
@@ -568,7 +655,14 @@ function M.new()
     end
 
     function U.terminal(name_or_fn, maybe_fn)
-        return U._memoize_with(backend_memoize, "terminal", name_or_fn, maybe_fn)
+        local name, fn = parse_memo_args("terminal", name_or_fn, maybe_fn)
+        return U._memoize_with(backend_memoize, "terminal", name, function(...)
+            local out = fn(...)
+            if is_machine(out) then
+                return U.machine_to_unit(out)
+            end
+            return out
+        end)
     end
 
     function U.memo_stats(memoized_fn)

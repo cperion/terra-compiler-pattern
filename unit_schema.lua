@@ -243,7 +243,7 @@ function M.install(U)
     local function define_asdl2_context(text)
         local asdl2_schema = require("asdl2.asdl2_schema")
         local asdl2_T = asdl2_schema.ctx
-        return asdl2_T.Asdl2Text.Spec(text):parse():catalog():classify_lower():define_machine():install()
+        return asdl2_T.Asdl2Text.Spec(text):tokenize():parse():catalog():classify_lower():define_machine():lower_luajit():install()
     end
 
     local function run_installer(ctx, config, inst)
@@ -820,7 +820,7 @@ function M.install(U)
         U.each(bs, function(b)
             local fn_name = kind .. "_" .. b.name
             lines[#lines + 1] = "    function " .. group .. "." .. fn_name .. "()"
-            lines[#lines + 1] = "        -- TODO: build representative input for " .. receiver .. ":" .. b.name
+            lines[#lines + 1] = "        error(\"scaffold: fill in " .. kind .. " for " .. receiver .. ":" .. b.name .. "\", 2)"
             if kind == "test" then
                 lines[#lines + 1] = "        -- local input = T." .. receiver .. "(...)"
                 lines[#lines + 1] = "        -- local out = input:" .. b.name .. "()"

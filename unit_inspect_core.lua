@@ -319,10 +319,9 @@ function M.new(U)
                 lines[#lines + 1] = ""
             end)
 
-            lines[#lines + 1] = "    -- TODO: construct return value"
-            lines[#lines + 1] = "    -- return ..., errs:get()"
+            lines[#lines + 1] = "    error(\"scaffold: construct return value and plumb errs:get()\", 2)"
         else
-            lines[#lines + 1] = "    -- TODO: implement"
+            lines[#lines + 1] = "    error(\"scaffold: implement boundary\", 2)"
         end
 
         lines[#lines + 1] = "end"
@@ -427,7 +426,7 @@ function M.new(U)
         lines[#lines + 1] = "    return U.match(self, {"
         U.each(variants, function(vname)
             lines[#lines + 1] = "        " .. vname .. " = function(self)"
-            lines[#lines + 1] = "            -- TODO: implement"
+            lines[#lines + 1] = "            error(\"scaffold: implement enum branch\", 2)"
             lines[#lines + 1] = "        end,"
         end)
         lines[#lines + 1] = "    })"

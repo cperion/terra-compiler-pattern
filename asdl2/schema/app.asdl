@@ -3,6 +3,33 @@ module Asdl2Text {
     Spec = (string text) unique
 }
 
+module Asdl2Token {
+
+    Spec = (Token* tokens) unique
+
+    Span = (
+        number start_byte,
+        number end_byte
+    ) unique
+
+    Token
+        = Ident(string text, Span span)
+        | ModuleKw(Span span)
+        | AttributesKw(Span span)
+        | UniqueKw(Span span)
+        | Eq(Span span)
+        | Bar(Span span)
+        | OptionalMark(Span span)
+        | ManyMark(Span span)
+        | Comma(Span span)
+        | LParen(Span span)
+        | RParen(Span span)
+        | LBrace(Span span)
+        | RBrace(Span span)
+        | Dot(Span span)
+        | Eof(Span span)
+}
+
 module Asdl2Source {
 
     Spec = (Definition* definitions) unique

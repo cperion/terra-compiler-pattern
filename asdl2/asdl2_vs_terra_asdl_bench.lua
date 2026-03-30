@@ -81,6 +81,7 @@ end
 
 local function install_asdl2(text)
     return T.Asdl2Text.Spec(text)
+        :tokenize()
         :parse()
         :catalog()
         :classify_lower()

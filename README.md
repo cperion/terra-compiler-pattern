@@ -43,6 +43,11 @@ The runtime vocabulary is now split into small layers.
 Backend-independent helpers:
 
 - canonical `gen / param / state` traversal helpers
+- explicit `Machine` descriptors via:
+  - `U.machine_step(...)`
+  - `U.machine_iter(...)`
+  - `U.machine_run(...)`
+  - `U.machine_iterate(...)`
 - pure memoize wrapper shape
 - `with_fallback`
 - `with_errors`
@@ -91,6 +96,8 @@ The backend only changes how `Unit`s are realized, installed, and executed.
 Owns LuaJIT-specific behavior:
 
 - closure-based leaf compilation
+- explicit `Machine -> Unit` realization (`U.machine_to_unit`)
+- terminal auto-realization when a LuaJIT terminal returns a `Machine`
 - FFI/cdata state layouts for production leaves
 - LuaJIT hot-slot swapping
 - Lua callback application loop

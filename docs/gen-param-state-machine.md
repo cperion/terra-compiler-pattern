@@ -9,6 +9,19 @@ The repository's runtime contract remains:
 
 But `Unit` is not the first machine concept.
 
+`unit` now exposes that machine layer explicitly in the shared API:
+
+- `U.machine_step(...)`
+- `U.machine_iter(...)`
+- `U.machine_run(...)`
+- `U.machine_iterate(...)`
+- `U.is_machine(...)`
+
+And in LuaJIT:
+
+- `U.machine_to_unit(...)`
+- `U.terminal(...)` can auto-realize returned `Machine`s
+
 The better articulation is:
 
 > a terminal first defines a `gen, param, state` machine,
@@ -74,7 +87,16 @@ A useful reference point is `fun.lua`, which normalizes rich iteration forms int
 
 - `(gen, param, state)`
 
-That protocol is interesting here not because all leaves should become iterators, but because it reveals a general machine pattern:
+That protocol is interesting here not because all leaves should become iterators, but because it reveals a general machine pattern.
+
+In `unit`, that distinction is now explicit:
+
+- **step machines** for one-call kernels / callbacks / parsers
+- **iter machines** for traversal-shaped leaves that should plug directly into `U.each`, `U.fold`, `U.map`, `U.find`, and friends
+
+So iterator benefits are available as a first-class machine family without forcing every terminal into iterator semantics.
+
+That protocol is interesting here because it reveals a general machine pattern:
 
 > efficient execution often wants a tiny regular machine with explicit code, environment, and evolving state.
 

@@ -74,6 +74,7 @@ return {
     local text, receiver = U.scaffold_type_artifact(P, I, "Demo.Node", "impl")
     assert(receiver == "Demo.Node")
     assert(text:match("function T%.Demo%.Node:lower%(%)"))
+    assert(text:match("error%(%\"scaffold: implement boundary%\", 2%)"))
     assert(path:match("demo_node%.lua$"))
     assert(I.backend_inventory.totals.receiver_total == 2)
     assert(I.backend_inventory.totals.by_backend.luajit.impl == 1)
@@ -161,9 +162,13 @@ return {
     local profile_path = U.project_type_profile_path(P, "TreeTest.Node")
 
     assert(read(impl_path):match("function T%.TreeTest%.Node:lower%(%)"))
+    assert(read(impl_path):match("error%(%\"scaffold: implement boundary%\", 2%)"))
     assert(read(test_path):match("test_lower"))
+    assert(read(test_path):match("scaffold: fill in test for TreeTest%.Node:lower"))
     assert(read(bench_path):match("bench_lower"))
+    assert(read(bench_path):match("scaffold: fill in bench for TreeTest%.Node:lower"))
     assert(read(profile_path):match("profile_lower"))
+    assert(read(profile_path):match("scaffold: fill in profile for TreeTest%.Node:lower"))
 end
 
 test_load_project_and_paths_flat_default()

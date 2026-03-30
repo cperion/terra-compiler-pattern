@@ -90,21 +90,38 @@ function M.load_from_env()
         fields, variants = 12, 8
     end
 
-    local pool = nil
-    if mode == "parse_distinct" then
-        pool = {}
+    local text_pool = nil
+    local token_pool = nil
+    if mode == "tokenize_distinct" or mode == "parse_distinct" then
+        text_pool = {}
         for i = 1, iters do
-            pool[i] = T.Asdl2Text.Spec(build_text(i + 10000, types, fields, variants))
+            text_pool[i] = T.Asdl2Text.Spec(build_text(i + 10000, types, fields, variants))
+        end
+    end
+    if mode == "parse_distinct" then
+        token_pool = {}
+        for i = 1, iters do
+            token_pool[i] = text_pool[i]:tokenize()
         end
     end
 
     local base = T.Asdl2Text.Spec(build_text(1, types, fields, variants))
-    assert(base:parse().definitions[1] ~= nil)
+    local base_tokens = base:tokenize()
+    assert(base_tokens:parse().definitions[1] ~= nil)
+
+    local function run_tokenize_distinct()
+        local sink = 0
+        for i = 1, iters do
+            local token_spec = text_pool[i]:tokenize()
+            sink = sink + #token_spec.tokens
+        end
+        return sink
+    end
 
     local function run_parse_distinct()
         local sink = 0
         for i = 1, iters do
-            local source = pool[i]:parse()
+            local source = token_pool[i]:parse()
             sink = sink + #source.definitions
         end
         return sink
@@ -113,7 +130,7 @@ function M.load_from_env()
     local function run_build_plus_parse()
         local sink = 0
         for i = 1, iters do
-            local source = T.Asdl2Text.Spec(build_text(i + 200000, types, fields, variants)):parse()
+            local source = T.Asdl2Text.Spec(build_text(i + 200000, types, fields, variants)):tokenize():parse()
             sink = sink + #source.definitions
         end
         return sink
@@ -122,8 +139,17 @@ function M.load_from_env()
     local function run_parse_existing()
         local sink = 0
         for i = 1, iters do
-            local source = base:parse()
+            local source = base_tokens:parse()
             sink = sink + #source.definitions
+        end
+        return sink
+    end
+
+    local function run_tokenize_existing()
+        local sink = 0
+        for i = 1, iters do
+            local token_spec = base:tokenize()
+            sink = sink + #token_spec.tokens
         end
         return sink
     end
@@ -136,6 +162,8 @@ function M.load_from_env()
         variants = variants,
         iters = iters,
         run = ({
+            tokenize_distinct = run_tokenize_distinct,
+            tokenize_existing = run_tokenize_existing,
             parse_distinct = run_parse_distinct,
             build_plus_parse = run_build_plus_parse,
             parse_existing = run_parse_existing,

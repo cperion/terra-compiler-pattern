@@ -177,13 +177,19 @@ Currently normalized across backends:
 - `U.leaf(state_t, fn)`
 - `U.silent()`
 - `U.memoize`, `U.transition`, `U.terminal`
+- `U.machine_step(run, param, state_t?, family?)`
+- `U.machine_iter(next_fn, init_cursor, param, state_t?, family?)`
+- `U.machine_run(machine, runtime_state, ...)`
+- `U.machine_iterate(machine, runtime_state, ...)`
+- `U.is_machine(x)`
 - `U.hot_slot(...)`
 - `U.app(...)`
 
-Still backend-specific in surface details:
+Backend-specific realization status:
 
-- state layout construction APIs
-- backend-specific realization helpers such as `U.leaf_quote(...)` and `U.compose_quote(...)`
+- LuaJIT implements `U.machine_to_unit(machine)` and `U.terminal(...)` will auto-realize returned `Machine`s into `Unit`s
+- Terra still realizes Units directly through backend-native helpers like `U.leaf(...)`, `U.leaf_quote(...)`, and `U.compose_quote(...)`
+- state layout construction APIs remain backend-specific
 
 This is intentional current truth, not hidden behavior.
 
@@ -267,7 +273,114 @@ Used heavily in inspection/schema code.
 
 ---
 
-## 5.2 Memoized boundary wrappers
+## 5.2 Machine helpers
+
+These helpers make the canonical machine layer explicit in `unit`.
+
+A `Machine` is the conceptual artifact immediately above `Unit`.
+It is not a generic runtime DSL. It is a small explicit description of executable shape:
+
+- `shape` — currently `step` or `iter`
+- `family` — optional machine-family tag such as `tokenize`, `draw_stream`, `parser_step`
+- executable rule (`run` or `next`)
+- `param` — stable compiled payload
+- `state_t` — runtime-owned mutable state layout, when needed
+
+### `U.machine_step(run, param, state_t?, family?)`
+Create a step-oriented machine.
+
+Contract:
+
+```lua
+run(param, runtime_state, ...) -> ...
+```
+
+Use for leaves that are naturally one callable step per invocation:
+
+- kernels
+- reducers
+- parsers
+- callbacks
+- scalar/block processing steps
+
+### `U.machine_iter(next_fn, init_cursor, param, state_t?, family?)`
+Create an iterator-oriented machine.
+
+Contract:
+
+```lua
+next_fn(param, runtime_state, cursor, ...) -> next_cursor, item...
+```
+
+Where:
+
+- `param` is stable compiled payload
+- `runtime_state` is owned mutable state for the installed machine
+- `cursor` is traversal control state for one iteration
+
+`init_cursor` may be:
+
+- a fixed initial cursor value
+- or a function:
+
+```lua
+init_cursor(param, runtime_state, ...) -> cursor
+```
+
+Use for leaves that are naturally stream/traversal shaped:
+
+- token streams
+- draw command streams
+- schedule walks
+- hit-test walks
+- flattened traversal output
+
+### `U.is_machine(x)`
+Return true if `x` is a `Machine` descriptor created by `unit`.
+
+### `U.machine_run(machine, runtime_state, ...)`
+Execute a step machine directly without packaging it as a `Unit` first.
+
+Errors if `machine.shape ~= "step"`.
+
+Useful for:
+
+- leaf-first testing
+- local direct execution
+- comparing machine behavior before backend packaging
+
+### `U.machine_iterate(machine, runtime_state, ...)`
+Activate an iter machine as a normal `unit_core` iterable.
+
+Returns an iterable wrapper compatible with:
+
+- `U.rawiter`
+- `U.iter`
+- `U.each`
+- `U.fold`
+- `U.map`
+- `U.find`
+
+Errors if `machine.shape ~= "iter"`.
+
+This is how iterator-family machines get the normal traversal benefits from `unit_core` without forcing every machine into iterator semantics.
+
+### `U.machine_to_unit(machine)`
+Backend realization hook from explicit `Machine` to packaged `Unit`.
+
+Current status:
+
+- implemented in LuaJIT
+- not yet generalized in Terra
+
+### `U.terminal(name_or_fn, maybe_fn?)` and Machines
+If a terminal returns a `Machine` instead of a `Unit`, `unit` will attempt to realize it through `U.machine_to_unit(machine)`.
+
+This is currently intended primarily for LuaJIT leaves.
+
+---
+
+## 5.3 Memoized boundary wrappers
 
 These are the fundamental pure boundary wrappers.
 
@@ -294,16 +407,21 @@ Use for:
 - `project`
 
 ### `U.terminal(name_or_fn, maybe_fn?)`
-Memoized ASDL → `Unit` boundary.
+Memoized ASDL → executable boundary.
 
 Use for terminal compilation.
+
+A terminal may return:
+
+- a realized `Unit`
+- or an explicit `Machine`, in which case `unit` will route it through `U.machine_to_unit(machine)` when the active backend supports that realization path
 
 ### Naming behavior
 If no explicit name is supplied, `unit_core` infers one from debug info where possible.
 
 ---
 
-## 5.3 Memo diagnostics
+## 5.4 Memo diagnostics
 
 ### `U.memo_stats(memoized_fn)`
 Return the tracked stats table for a memoized function.
@@ -351,7 +469,7 @@ Reset tracked memo stats.
 
 ---
 
-## 5.4 Error helpers
+## 5.5 Error helpers
 
 ### `U.with_fallback(fn, neutral)`
 Wrap a function and return `neutral` if it errors.
@@ -391,7 +509,7 @@ Return accumulated errors, or `nil` if empty.
 
 ---
 
-## 5.5 ASDL helpers
+## 5.6 ASDL helpers
 
 ### `U.match(value, arms)`
 Exhaustive sum-type dispatch.

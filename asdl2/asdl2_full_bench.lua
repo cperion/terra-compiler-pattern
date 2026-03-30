@@ -106,7 +106,8 @@ end
 
 local function compile_chain(text, ctx)
     local text_spec = T.Asdl2Text.Spec(text)
-    local source = text_spec:parse()
+    local token_spec = text_spec:tokenize()
+    local source = token_spec:parse()
     local catalog = source:catalog()
     local lowered = catalog:classify_lower()
     local machine = lowered:define_machine()
@@ -114,6 +115,7 @@ local function compile_chain(text, ctx)
     local installed = luajit:install(ctx)
     return {
         text = text_spec,
+        token = token_spec,
         source = source,
         catalog = catalog,
         lowered = lowered,
@@ -140,8 +142,12 @@ local base_ctx = new_ctx()
 local base = compile_chain(base_text, base_ctx)
 assert(base.ctx[module_name(1)] ~= nil)
 
+local tokenize_existing_ms = bench_avg_ms(iters, function()
+    base.text:tokenize()
+end)
+
 local parse_existing_ms = bench_avg_ms(iters, function()
-    base.text:parse()
+    base.token:parse()
 end)
 
 local catalog_existing_ms = bench_avg_ms(iters, function()
@@ -204,6 +210,7 @@ print(string.format(
     fields,
     variants
 ))
+print(string.format("tokenize_existing_avg_ms: %.3f", tokenize_existing_ms))
 print(string.format("parse_existing_avg_ms: %.3f", parse_existing_ms))
 print(string.format("catalog_existing_avg_ms: %.3f", catalog_existing_ms))
 print(string.format("classify_lower_existing_avg_ms: %.3f", classify_lower_existing_ms))

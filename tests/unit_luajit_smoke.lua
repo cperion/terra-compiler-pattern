@@ -15,6 +15,48 @@ ffi.cdef [[
 
 local CounterState_t = U.state_ffi("CounterState")
 
+local function test_machine_realization_and_terminal_normalization()
+    local step = U.machine_step(function(param, state, x)
+        state.value = state.value + x
+        return state.value + param.bias
+    end, { bias = 10 }, CounterState_t, "biased_counter")
+
+    local step_unit = U.machine_to_unit(step)
+    local step_state = step_unit.state_t.alloc()
+    local y1 = step_unit.fn(step_state, 2)
+    local y2 = step_unit.fn(step_state, 5)
+    assert(y1 == 12)
+    assert(y2 == 17)
+    step_unit.state_t.release(step_state)
+
+    local iter = U.machine_iter(function(param, state, cursor, limit)
+        if cursor > limit then return nil end
+        state.value = state.value + 1
+        return cursor + 1, cursor * param.scale
+    end, 1, { scale = 4 }, CounterState_t, "scaled_range")
+
+    local iter_unit = U.machine_to_unit(iter)
+    local iter_state = iter_unit.state_t.alloc()
+    local values = U.map(iter_unit.fn(iter_state, 3), function(x)
+        return x
+    end)
+    assert(#values == 3)
+    assert(values[1] == 4)
+    assert(values[2] == 8)
+    assert(values[3] == 12)
+    assert(iter_state.value == 3)
+    iter_unit.state_t.release(iter_state)
+
+    local compile_value = U.terminal(function(state)
+        return U.machine_step(function(param, _, x)
+            return x + param.delta
+        end, { delta = state.delta }, nil, "add_delta")
+    end)
+
+    local unit = compile_value({ delta = 7 })
+    assert(unit.fn(nil, 5) == 12)
+end
+
 local function test_leaf_compose_hot_slot()
     local add = U.leaf(CounterState_t, function(state, x)
         state.value = state.value + x
@@ -139,6 +181,7 @@ local function test_app_loop()
     assert(seen[3] == 13)
 end
 
+test_machine_realization_and_terminal_normalization()
 test_leaf_compose_hot_slot()
 test_compose_linear()
 test_app_loop()
