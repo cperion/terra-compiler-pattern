@@ -29,6 +29,16 @@ end
 return function(T, U, P)
     local benches = {}
 
+    function benches.bench_emit_lua()
+        local machine = select(1, Fixture.new_tokenize_machine_and_target_ctx(T))
+        local iters = 500
+        local avg_ms = bench_avg_ms(iters, function()
+            local out = machine:emit_lua()
+            return #out.files
+        end)
+        print(string.format("frontendc emit_lua bench iters=%d avg_ms=%.6f", iters, avg_ms))
+    end
+
     function benches.bench_install_generated()
         local machine, target_ctx = Fixture.new_tokenize_machine_and_target_ctx(T)
         local iters = 200

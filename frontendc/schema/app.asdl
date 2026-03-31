@@ -1,22 +1,99 @@
+-- ============================================================================
+-- FrontendC ASDL
+-- ----------------------------------------------------------------------------
+-- Purpose
+-- -------
+-- FrontendC describes a compiler-generated frontend family:
+--
+--   source text
+--     -> tokenize
+--     -> token stream
+--     -> parse
+--     -> AST / constructor result
+--
+-- It is designed from the machine upward.
+--
+-- That means:
+--   - Source modules describe authored frontend intent.
+--   - Checked modules consume ambiguity and assign stable ids/shapes.
+--   - Lowered modules describe machine-feeding lexer/parser plans.
+--   - Machine modules describe installation into boundary targets.
+--   - Backend-specific emission (Lua, Terra, etc.) stays separate.
+--
+-- Architectural rule
+-- ------------------
+-- The machine is the center.
+--
+-- This schema is not trying to preserve parser-combinator elegance all the way
+-- down. It is trying to make the final tokenize/parse machines obvious and
+-- installable.
+--
+-- Layer stack
+-- -----------
+--   FrontendSource
+--     authored spec language
+--
+--   FrontendChecked
+--     validated / resolved / canonicalized spec
+--
+--   FrontendLowered
+--     machine-feeding lexer/parser plans
+--
+--   FrontendMachine
+--     install-ready machine attachment
+--
+--   FrontendLua
+--     emitted Lua boundary files
+-- ============================================================================
+
+
 module FrontendSource {
 
+    -- ========================================================================
+    -- Authored frontend specification
+    -- ========================================================================
+    -- This is the source-facing language for describing a generated frontend.
+    --
+    -- It intentionally combines:
+    --   - where the frontend attaches in the host compiler framework
+    --   - the lexer description
+    --   - the parser description
+    --
+    -- It does NOT yet assign numeric ids, bitsets, capture slots, or result
+    -- constructor ids. That is the role of FrontendChecked.
+    -- ========================================================================
+
     Spec = (
-        BoundaryTarget target,
+        Target target,
         Lexer lexer,
         Parser parser
     ) unique
 
-    BoundaryTarget = (
+    -- ------------------------------------------------------------------------
+    -- Target
+    -- ------------------------------------------------------------------------
+    -- Source-facing declaration of where generated boundaries attach and which
+    -- output constructors must be available.
+    --
+    -- These remain strings at source level. Later phases structure them into
+    -- install-ready paths.
+    -- ------------------------------------------------------------------------
+    Target = (
         string tokenize_receiver_fqname,
         string tokenize_verb,
+
         string parse_receiver_fqname,
         string parse_verb,
+
         string token_spec_ctor_fqname,
         string token_cell_ctor_fqname,
         string token_span_ctor_fqname,
         string source_spec_ctor_fqname
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Lexer source language
+    -- ------------------------------------------------------------------------
     Lexer = (
         SkipRule* skips,
         TokenDef* tokens
@@ -26,17 +103,46 @@ module FrontendSource {
         = WhitespaceSkip()
         | LineCommentSkip(string opener)
 
+    -- ------------------------------------------------------------------------
+    -- Token definitions
+    -- ------------------------------------------------------------------------
+    -- This source language currently supports:
+    --   - exact keyword tokens
+    --   - exact punctuation tokens
+    --   - identifier tokens over source-level character sets
+    --   - quoted string tokens
+    --   - JSON-style number lexemes
+    --
+    -- QuotedStringToken currently means:
+    --   - one-byte quote character
+    --   - optional backslash escape processing
+    --
+    -- NumberToken currently means:
+    --   - JSON-style decimal numeric lexeme scanning
+    --   - semantic payload is the matched text
+    -- ------------------------------------------------------------------------
     TokenDef
         = KeywordToken(string name, string text)
         | PunctToken(string name, string text)
         | IdentToken(string name, CharSet start_set, CharSet continue_set)
+        | QuotedStringToken(string name, string quote_char, boolean backslash_escapes)
+        | NumberToken(string name)
 
+    -- ------------------------------------------------------------------------
+    -- Source character set algebra
+    -- ------------------------------------------------------------------------
+    -- This is source convenience syntax only.
+    -- Later phases should canonicalize it into checked bitset form.
+    -- ------------------------------------------------------------------------
     CharSet
         = AsciiLetters()
         | AsciiDigits()
         | Underscore()
         | Union(CharSet* parts)
 
+    -- ------------------------------------------------------------------------
+    -- Parser source language
+    -- ------------------------------------------------------------------------
     Parser = (
         string entry_rule_name,
         Rule* rules
@@ -48,6 +154,17 @@ module FrontendSource {
         Result result
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Parser expression language
+    -- ------------------------------------------------------------------------
+    -- This is intentionally compact and grammar-oriented.
+    -- It is not yet machine-facing.
+    --
+    -- Build is the local semantic grouping form: it parses an inner expression
+    -- and then assembles a semantic result from the captures made while doing
+    -- so. This is the honest source-level way to express multi-value sequence
+    -- capture without forcing ad hoc lowering behavior.
+    -- ------------------------------------------------------------------------
     Expr
         = TokenRef(string token_name)
         | RuleRef(string rule_name)
@@ -57,7 +174,16 @@ module FrontendSource {
         | Many(Expr inner)
         | OneOrMore(Expr inner)
         | Capture(string capture_name, Expr inner)
+        | Build(Expr inner, Result result)
 
+    -- ------------------------------------------------------------------------
+    -- Result construction language
+    -- ------------------------------------------------------------------------
+    -- Result describes how a successful parse result is assembled.
+    --
+    -- It is explicit because AST/result construction is a real semantic part of
+    -- the frontend, not hidden codegen magic.
+    -- ------------------------------------------------------------------------
     Result
         = ReturnCtor(string ctor_fqname, FieldResult* fields)
         | ReturnCapture(string capture_name)
@@ -75,41 +201,94 @@ module FrontendSource {
         | ConstBoolSource(boolean value)
 }
 
+
 module FrontendChecked {
 
+    -- ========================================================================
+    -- Checked / validated frontend spec
+    -- ========================================================================
+    -- Meaning:
+    --   FrontendSource -> check -> FrontendChecked
+    --
+    -- Responsibilities:
+    --   - resolve names
+    --   - assign token ids / rule ids / capture slot ids
+    --   - canonicalize character sets
+    --   - validate result ctor/field references
+    --   - compute first sets and nullability
+    --   - make slot/payload/semantic value shapes explicit
+    --
+    -- This phase should consume ambiguity aggressively so that lowering becomes
+    -- straightforward.
+    -- ========================================================================
+
     Spec = (
-        FrontendSource.BoundaryTarget target,
+        FrontendSource.Target target,
         Lexer lexer,
         Parser parser
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Checked lexer
+    -- ------------------------------------------------------------------------
     Lexer = (
         TokenDef* tokens,
         SkipRule* skips
     ) unique
 
-    TokenDef
-        = KeywordToken(TokenHeader header, string text)
-        | PunctToken(TokenHeader header, string text)
-        | IdentToken(TokenHeader header, FrontendSource.CharSet start_set, FrontendSource.CharSet continue_set)
-
     SkipRule
         = WhitespaceSkip()
         | LineCommentSkip(string opener)
 
+    TokenDef
+        = KeywordToken(TokenHeader header, string text)
+        | PunctToken(TokenHeader header, string text)
+        | IdentToken(TokenHeader header, CheckedCharSet start_set, CheckedCharSet continue_set)
+        | QuotedStringToken(TokenHeader header, string quote_char, boolean backslash_escapes)
+        | NumberToken(TokenHeader header)
+
+    -- ------------------------------------------------------------------------
+    -- Token header
+    -- ------------------------------------------------------------------------
+    -- token_id is the stable numeric identity used by lowered and machine
+    -- phases. payload_shape says what semantic token payload, if any, is
+    -- produced by tokenization.
+    --
+    -- StringTokenPayload means the tokenizer produces a Lua string payload.
+    -- That payload may be an identifier lexeme, a decoded quoted string, or a
+    -- numeric lexeme text depending on token family.
+    -- ------------------------------------------------------------------------
     TokenHeader = (
         string name,
         number token_id,
-        TokenValueShape value_shape
+        TokenPayloadShape payload_shape
     ) unique
 
-    TokenValueShape
-        = NoValue()
-        | StringValue()
+    TokenPayloadShape
+        = NoTokenPayload()
+        | StringTokenPayload()
 
+    -- ------------------------------------------------------------------------
+    -- Canonicalized character set
+    -- ------------------------------------------------------------------------
+    -- This is the checked canonical set representation used by lowered lexing.
+    -- For now it is bitset-oriented and intentionally low-level.
+    -- ------------------------------------------------------------------------
+    CheckedCharSet = (
+        number* bitset_words
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Checked parser
+    -- ------------------------------------------------------------------------
     Parser = (
         RuleHeader entry_rule,
         Rule* rules
+    ) unique
+
+    RuleHeader = (
+        string name,
+        number rule_id
     ) unique
 
     Rule = (
@@ -120,11 +299,14 @@ module FrontendChecked {
         boolean nullable
     ) unique
 
-    RuleHeader = (
-        string name,
-        number rule_id
-    ) unique
-
+    -- ------------------------------------------------------------------------
+    -- Checked parser expressions
+    -- ------------------------------------------------------------------------
+    -- Source names are replaced with stable checked headers/slots.
+    --
+    -- Build remains explicit here so local semantic grouping survives checking
+    -- and reaches lowering as a first-class checked construct.
+    -- ------------------------------------------------------------------------
     CheckedExpr
         = TokenRef(TokenHeader header)
         | RuleRef(RuleHeader header)
@@ -134,18 +316,34 @@ module FrontendChecked {
         | Many(CheckedExpr inner)
         | OneOrMore(CheckedExpr inner)
         | Capture(CaptureHeader header, CheckedExpr inner)
+        | Build(CheckedExpr inner, CheckedResult result)
 
+    -- ------------------------------------------------------------------------
+    -- Capture slots
+    -- ------------------------------------------------------------------------
+    -- slot_shape describes storage discipline of the capture during machine
+    -- execution:
+    --   - single slot      : one semantic value
+    --   - list slot        : repeated values accumulate
+    --   - presence slot    : boolean presence signal
+    -- ------------------------------------------------------------------------
     CaptureHeader = (
         string name,
         number slot_id,
-        CaptureShape shape
+        CaptureSlotShape slot_shape
     ) unique
 
-    CaptureShape
-        = SingleCapture()
-        | ListCapture()
-        | PresenceCapture()
+    CaptureSlotShape
+        = SingleSlot()
+        | ListSlot()
+        | PresenceSlot()
 
+    -- ------------------------------------------------------------------------
+    -- Checked result construction
+    -- ------------------------------------------------------------------------
+    -- semantic_value_shape describes what a constructor field expects
+    -- semantically, independent of how intermediate machine slots store data.
+    -- ------------------------------------------------------------------------
     CheckedResult
         = ReturnCtor(CtorTarget ctor, FieldResult* fields)
         | ReturnCapture(CaptureHeader header)
@@ -158,7 +356,7 @@ module FrontendChecked {
 
     TargetField = (
         string field_name,
-        ValueShape expected_shape
+        SemanticValueShape expected_shape
     ) unique
 
     FieldResult = (
@@ -172,37 +370,71 @@ module FrontendChecked {
         | JoinedListSource(CaptureHeader header, string separator)
         | ConstBoolSource(boolean value)
 
-    ValueShape
+    SemanticValueShape
         = NodeValue()
         | ListValue()
         | StringValue()
         | BoolValue()
 
+    -- ------------------------------------------------------------------------
+    -- First sets
+    -- ------------------------------------------------------------------------
+    -- eof_ok means this set also admits EOF as a valid lookahead.
+    -- ------------------------------------------------------------------------
     FirstSet = (
         number* token_ids,
         boolean eof_ok
     ) unique
 }
 
+
 module FrontendLowered {
 
+    -- ========================================================================
+    -- Lowered machine-feeding plans
+    -- ========================================================================
+    -- Meaning:
+    --   FrontendChecked -> lower -> FrontendLowered
+    --
+    -- Responsibilities:
+    --   - turn checked lexer/parser structures into explicit tokenize/parse
+    --     plans suitable for machine definition
+    --   - replace source/checking-oriented structure with direct machine-facing
+    --     dispatch, step, slot, and result plans
+    --
+    -- This phase should be as close to the machine as possible while still
+    -- remaining backend-neutral.
+    -- ========================================================================
+
     Spec = (
-        FrontendSource.BoundaryTarget target,
+        FrontendSource.Target target,
         TokenizeMachine tokenize,
         ParseMachine parse
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Lowered tokenize machine
+    -- ------------------------------------------------------------------------
     TokenizeMachine = (
         FrontendChecked.TokenHeader eof_header,
         SkipPlan* skips,
         FixedDispatch* fixed_dispatches,
-        IdentDispatch* ident_dispatches
+        IdentDispatch* ident_dispatches,
+        QuotedStringDispatch* quoted_string_dispatches,
+        NumberDispatch* number_dispatches
     ) unique
 
     SkipPlan
         = WhitespaceSkip()
         | LineCommentSkip(string opener)
 
+    -- ------------------------------------------------------------------------
+    -- Fixed dispatch
+    -- ------------------------------------------------------------------------
+    -- first_byte buckets exact keyword/punctuation matching by leading byte.
+    -- requires_word_boundary is useful for keywords that must not steal a
+    -- prefix of an identifier.
+    -- ------------------------------------------------------------------------
     FixedDispatch = (
         number first_byte,
         FixedCase* cases
@@ -214,58 +446,119 @@ module FrontendLowered {
         boolean requires_word_boundary
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Identifier dispatch
+    -- ------------------------------------------------------------------------
+    -- start/continue sets are canonical checked bitsets.
+    -- ------------------------------------------------------------------------
     IdentDispatch = (
         FrontendChecked.TokenHeader header,
         number* start_bitset_words,
         number* continue_bitset_words
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Quoted string dispatch
+    -- ------------------------------------------------------------------------
+    -- quote_byte is the single-byte delimiter character.
+    -- backslash_escapes controls whether backslash escape decoding is enabled.
+    -- ------------------------------------------------------------------------
+    QuotedStringDispatch = (
+        FrontendChecked.TokenHeader header,
+        number quote_byte,
+        boolean backslash_escapes
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Number dispatch
+    -- ------------------------------------------------------------------------
+    -- NumberToken currently lowers to JSON-style decimal scanning.
+    -- ------------------------------------------------------------------------
+    NumberDispatch = (
+        FrontendChecked.TokenHeader header
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Lowered parse machine
+    -- ------------------------------------------------------------------------
     ParseMachine = (
         FrontendChecked.RuleHeader entry_rule,
         ResultCtor* result_ctors,
         FirstSetTable* first_sets,
-        RuleClosurePlan* rules
+        RulePlan* rules
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Result constructor table
+    -- ------------------------------------------------------------------------
     ResultCtor = (
         number ctor_id,
         FrontendChecked.CtorTarget ctor
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- First-set bitset table
+    -- ------------------------------------------------------------------------
+    -- set_id is used by lowered choice/optional/repeat dispatch.
+    -- ------------------------------------------------------------------------
     FirstSetTable = (
         number set_id,
         number* bitset_words
     ) unique
 
-    RuleClosurePlan
-        = TokenRule(
-            FrontendChecked.RuleHeader header,
-            FrontendChecked.TokenHeader token,
-            number capture_slot,
-            ResultPlan result
-        )
-        | SeqRule(
-            FrontendChecked.RuleHeader header,
-            Step* steps,
-            ResultPlan result
-        )
-        | ChoiceRule(
-            FrontendChecked.RuleHeader header,
-            ChoiceArm* arms,
-            ResultPlan result
-        )
-
-    ChoiceArm = (
-        number set_id,
-        Step* steps
+    -- ------------------------------------------------------------------------
+    -- Lowered rule plan
+    -- ------------------------------------------------------------------------
+    -- This is intentionally more regular than the source grammar.
+    --
+    -- kind tells the general execution shape:
+    --   - token rule   : direct token expectation
+    --   - seq rule     : straight-line sequence
+    --   - choice rule  : first-set-routed branching
+    -- ------------------------------------------------------------------------
+    RulePlan = (
+        FrontendChecked.RuleHeader header,
+        RuleKind kind,
+        Step* body,
+        ChoiceArm* choice_arms,
+        ResultPlan result
     ) unique
 
+    RuleKind
+        = TokenRuleKind()
+        | SeqRuleKind()
+        | ChoiceRuleKind()
+
+    -- ------------------------------------------------------------------------
+    -- Choice arms
+    -- ------------------------------------------------------------------------
+    -- set_id is the lookahead first-set that admits the arm.
+    -- ------------------------------------------------------------------------
+    ChoiceArm = (
+        number set_id,
+        Step* body
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Lowered steps
+    -- ------------------------------------------------------------------------
+    -- These are the direct machine-facing parser actions.
+    --
+    -- set_id in OptionalGroup / RepeatGroup means:
+    --   the lookahead first-set that determines whether the group is entered.
+    -- ------------------------------------------------------------------------
     Step
         = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
         | CallRule(FrontendChecked.RuleHeader header, number capture_slot)
-        | OptionalGroup(number set_id, Step* steps)
-        | RepeatGroup(number set_id, Step* steps)
+        | OptionalGroup(number set_id, Step* body)
+        | RepeatGroup(number set_id, Step* body)
 
+    -- ------------------------------------------------------------------------
+    -- Lowered result plan
+    -- ------------------------------------------------------------------------
+    -- ReturnCtor carries normalized arg sources.
+    -- ReturnSlot returns the semantic value currently stored in a slot.
+    -- ------------------------------------------------------------------------
     ResultPlan
         = ReturnCtor(number ctor_id, ArgSource* args)
         | ReturnSlot(number slot_id)
@@ -278,27 +571,57 @@ module FrontendLowered {
         | ReadConstBool(boolean value)
 }
 
+
 module FrontendMachine {
+
+    -- ========================================================================
+    -- Install-ready frontend machine description
+    -- ========================================================================
+    -- Meaning:
+    --   FrontendLowered -> define_machine -> FrontendMachine
+    --
+    -- Responsibilities:
+    --   - attach lowered tokenize/parse machines to concrete boundary targets
+    --   - replace raw fqname strings with structured paths
+    --   - make constructor references explicit for install/codegen
+    --
+    -- This layer is not backend emission yet.
+    -- It is the canonical machine-install layer.
+    -- ========================================================================
 
     Spec = (
         TokenizeInstall tokenize,
         ParseInstall parse
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Structured path
+    -- ------------------------------------------------------------------------
+    -- A structured fqname/module path split into parts.
+    -- ------------------------------------------------------------------------
     Path = (
         string* parts
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Boundary attachment
+    -- ------------------------------------------------------------------------
     BoundaryHeader = (
         Path receiver_path,
         string verb
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Constructor reference
+    -- ------------------------------------------------------------------------
     CtorRef = (
         number ctor_id,
         Path ctor_path
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Tokenize installation
+    -- ------------------------------------------------------------------------
     TokenizeInstall = (
         BoundaryHeader header,
         Path output_spec_ctor_path,
@@ -307,6 +630,9 @@ module FrontendMachine {
         FrontendLowered.TokenizeMachine machine
     ) unique
 
+    -- ------------------------------------------------------------------------
+    -- Parse installation
+    -- ------------------------------------------------------------------------
     ParseInstall = (
         BoundaryHeader header,
         Path output_spec_ctor_path,
@@ -315,7 +641,18 @@ module FrontendMachine {
     ) unique
 }
 
+
 module FrontendLua {
+
+    -- ========================================================================
+    -- Lua backend emission
+    -- ========================================================================
+    -- Meaning:
+    --   FrontendMachine -> emit_lua -> FrontendLua
+    --
+    -- This module is intentionally thin. It simply describes the emitted Lua
+    -- boundary files.
+    -- ========================================================================
 
     Spec = (
         BoundaryFile* files

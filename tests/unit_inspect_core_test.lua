@@ -217,11 +217,15 @@ local function test_render_helpers()
                 boundary_coverage = 1.0,
             },
         },
-    }, { "Demo" })
+    }, { "Demo" }, {
+        { from = "Demo", verb = "lower", to = "Demo2" },
+    })
 
     assert(status:match("Schema inventory:"))
     assert(status:match("Boundary coverage:"))
     assert(status:match("100%.0%%"))
+    assert(status:match("Pipeline:"))
+    assert(status:match("Demo %-lower%-> Demo2"))
 
     local type_map = {
         ["Demo.Expr"] = DemoExpr,

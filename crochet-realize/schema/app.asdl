@@ -1,0 +1,435 @@
+-- ============================================================================
+-- crochet-realize
+-- ----------------------------------------------------------------------------
+-- Crochet as a structural realization compiler.
+--
+-- Pipeline
+-- --------
+--   CrochetRealizeSource
+--     -> check_realize
+--     -> CrochetRealizeChecked
+--     -> lower_realize
+--     -> CrochetRealizePlan
+--     -> prepare_install
+--     -> CrochetRealizeLua
+--
+-- Design goals
+-- ------------
+-- - proto boundary is the memo boundary
+-- - structure is preserved as long as possible
+-- - host contract is explicit
+-- - text-host and closure-host realization are different families
+-- - source is ergonomic, plan is narrow, install is cheap
+-- ============================================================================
+
+module CrochetRealizeRuntime {
+    ValueRef = (
+        string debug_name,
+        any value
+    ) unique
+}
+
+module CrochetRealizeSource {
+    Catalog = (
+        Proto* protos,
+        string entry_name,
+        HostContract host
+    ) unique
+
+    Proto
+        = TextProto(
+              string name,
+              string* params,
+              Capture* captures,
+              TextBlock body
+          )
+        | ClosureProto(
+              string name,
+              string* params,
+              Capture* captures,
+              ClosureBlock body
+          )
+
+    Capture = (
+        string name,
+        CrochetRealizeRuntime.ValueRef value
+    ) unique
+
+    TextBlock = (
+        TextNode* nodes
+    ) unique
+
+    TextNode
+        = LineNode(TextPart* parts)
+        | BlankNode()
+        | NestNode(TextLine opener, TextBlock body, TextLine closer)
+
+    TextLine = (
+        TextPart* parts
+    ) unique
+
+    TextPart
+        = TextPart(string text)
+        | ParamRef(string name)
+        | CaptureRef(string name)
+
+    ClosureBlock = (
+        ClosureStmt* stmts
+    ) unique
+
+    ClosureStmt
+        = LetStmt(string name, ClosureExpr value)
+        | SetStmt(string name, ClosureExpr value)
+        | EffectStmt(ClosureExpr expr)
+        | ReturnStmt(ClosureExpr value)
+        | IfStmt(ClosureExpr cond, ClosureBlock then_body, ClosureBlock else_body)
+        | ForRangeStmt(string name, ClosureExpr start, ClosureExpr stop, ClosureExpr step, ClosureBlock body)
+        | WhileStmt(ClosureExpr cond, ClosureBlock body)
+
+    ClosureExpr
+        = ParamExpr(string name)
+        | CaptureExpr(string name)
+        | LocalExpr(string name)
+        | LiteralExpr(CrochetRealizeRuntime.ValueRef value)
+        | CallExpr(ClosureExpr fn, ClosureExpr* args)
+        | IndexExpr(ClosureExpr base, ClosureExpr key)
+        | UnaryExpr(UnaryOp op, ClosureExpr value)
+        | BinaryExpr(BinaryOp op, ClosureExpr lhs, ClosureExpr rhs)
+
+    UnaryOp
+        = NotOp()
+        | NegOp()
+        | LenOp()
+
+    BinaryOp
+        = AddOp()
+        | SubOp()
+        | MulOp()
+        | DivOp()
+        | ModOp()
+        | EqOp()
+        | NeOp()
+        | LtOp()
+        | LeOp()
+        | GtOp()
+        | GeOp()
+        | AndOp()
+        | OrOp()
+
+    HostContract
+        = LuaSourceHost()
+        | LuaClosureHost(ClosureMode mode)
+        | LuaBytecodeHost()
+
+    ClosureMode
+        = DirectClosureMode()
+        | ClosureBundleMode()
+}
+
+module CrochetRealizeChecked {
+    Catalog = (
+        Proto* protos,
+        number entry_proto_id,
+        HostContract host
+    ) unique
+
+    Proto
+        = TextProto(
+              ProtoHeader header,
+              Param* params,
+              Capture* captures,
+              TextBlock body
+          )
+        | ClosureProto(
+              ProtoHeader header,
+              Param* params,
+              Capture* captures,
+              ClosureBlock body
+          )
+
+    ProtoHeader = (
+        string name,
+        number proto_id
+    ) unique
+
+    Param = (
+        string name,
+        number param_id
+    ) unique
+
+    Capture = (
+        string name,
+        number capture_id,
+        CrochetRealizeRuntime.ValueRef value
+    ) unique
+
+    TextBlock = (
+        TextNode* nodes
+    ) unique
+
+    TextNode
+        = LineNode(TextPart* parts)
+        | BlankNode()
+        | NestNode(TextLine opener, TextBlock body, TextLine closer)
+
+    TextLine = (
+        TextPart* parts
+    ) unique
+
+    TextPart
+        = TextPart(string text)
+        | ParamRef(number param_id)
+        | CaptureRef(number capture_id)
+
+    ClosureBlock = (
+        ClosureStmt* stmts
+    ) unique
+
+    ClosureStmt
+        = LetStmt(LocalHeader local_header, ClosureExpr value)
+        | SetStmt(number local_id, ClosureExpr value)
+        | EffectStmt(ClosureExpr expr)
+        | ReturnStmt(ClosureExpr value)
+        | IfStmt(ClosureExpr cond, ClosureBlock then_body, ClosureBlock else_body)
+        | ForRangeStmt(LocalHeader local_header, ClosureExpr start, ClosureExpr stop, ClosureExpr step, ClosureBlock body)
+        | WhileStmt(ClosureExpr cond, ClosureBlock body)
+
+    LocalHeader = (
+        string name,
+        number local_id
+    ) unique
+
+    ClosureExpr
+        = ParamExpr(number param_id)
+        | CaptureExpr(number capture_id)
+        | LocalExpr(number local_id)
+        | LiteralExpr(CrochetRealizeRuntime.ValueRef value)
+        | CallExpr(ClosureExpr fn, ClosureExpr* args)
+        | IndexExpr(ClosureExpr base, ClosureExpr key)
+        | UnaryExpr(UnaryOp op, ClosureExpr value)
+        | BinaryExpr(BinaryOp op, ClosureExpr lhs, ClosureExpr rhs)
+
+    UnaryOp
+        = NotOp()
+        | NegOp()
+        | LenOp()
+
+    BinaryOp
+        = AddOp()
+        | SubOp()
+        | MulOp()
+        | DivOp()
+        | ModOp()
+        | EqOp()
+        | NeOp()
+        | LtOp()
+        | LeOp()
+        | GtOp()
+        | GeOp()
+        | AndOp()
+        | OrOp()
+
+    HostContract
+        = LuaSourceHost()
+        | LuaClosureHost(ClosureMode mode)
+        | LuaBytecodeHost()
+
+    ClosureMode
+        = DirectClosureMode()
+        | ClosureBundleMode()
+}
+
+module CrochetRealizePlan {
+    Catalog = (
+        ProtoPlan* protos,
+        number entry_proto_id,
+        HostContract host
+    ) unique
+
+    ProtoPlan
+        = TextProtoPlan(
+              string name,
+              number proto_id,
+              string chunk_name,
+              string shape_key,
+              string artifact_key,
+              string source,
+              CapturePlan* captures
+          )
+        | ClosureProtoPlan(
+              string name,
+              number proto_id,
+              string shape_key,
+              string artifact_key,
+              ParamPlan* params,
+              CapturePlan* captures,
+              ClosurePlanBlock body
+          )
+
+    ParamPlan = (
+        string name,
+        number param_id
+    ) unique
+
+    CapturePlan = (
+        string name,
+        number capture_id,
+        CrochetRealizeRuntime.ValueRef value,
+        number bind_index
+    ) unique
+
+    ClosurePlanBlock = (
+        ClosurePlanStmt* stmts
+    ) unique
+
+    ClosurePlanStmt
+        = LetPlan(LocalPlan local_info, ClosurePlanExpr value)
+        | SetPlan(number local_id, ClosurePlanExpr value)
+        | EffectPlan(ClosurePlanExpr expr)
+        | ReturnPlan(ClosurePlanExpr value)
+        | IfPlan(ClosurePlanExpr cond, ClosurePlanBlock then_body, ClosurePlanBlock else_body)
+        | ForRangePlan(LocalPlan local_info, ClosurePlanExpr start, ClosurePlanExpr stop, ClosurePlanExpr step, ClosurePlanBlock body)
+        | WhilePlan(ClosurePlanExpr cond, ClosurePlanBlock body)
+
+    LocalPlan = (
+        string name,
+        number local_id
+    ) unique
+
+    ClosurePlanExpr
+        = ParamExpr(number param_id)
+        | CaptureExpr(number capture_id)
+        | LocalExpr(number local_id)
+        | LiteralExpr(CrochetRealizeRuntime.ValueRef value)
+        | CallExpr(ClosurePlanExpr fn, ClosurePlanExpr* args)
+        | IndexExpr(ClosurePlanExpr base, ClosurePlanExpr key)
+        | UnaryExpr(UnaryOp op, ClosurePlanExpr value)
+        | BinaryExpr(BinaryOp op, ClosurePlanExpr lhs, ClosurePlanExpr rhs)
+
+    UnaryOp
+        = NotOp()
+        | NegOp()
+        | LenOp()
+
+    BinaryOp
+        = AddOp()
+        | SubOp()
+        | MulOp()
+        | DivOp()
+        | ModOp()
+        | EqOp()
+        | NeOp()
+        | LtOp()
+        | LeOp()
+        | GtOp()
+        | GeOp()
+        | AndOp()
+        | OrOp()
+
+    HostContract
+        = LuaSourceHost()
+        | LuaClosureHost(ClosureMode mode)
+        | LuaBytecodeHost()
+
+    ClosureMode
+        = DirectClosureMode()
+        | ClosureBundleMode()
+}
+
+module CrochetRealizeLua {
+    Catalog = (
+        ProtoInstall* protos,
+        number entry_proto_id,
+        InstallMode artifact_mode
+    ) unique
+
+    ProtoInstall
+        = SourceInstall(
+              string name,
+              number proto_id,
+              string chunk_name,
+              string artifact_key,
+              string source
+          )
+        | ClosureInstall(
+              string name,
+              number proto_id,
+              string artifact_key,
+              ParamInstall* params,
+              CaptureInstall* captures,
+              ClosureInstallBlock body
+          )
+        | BytecodeInstall(
+              string name,
+              number proto_id,
+              string chunk_name,
+              string artifact_key,
+              string source,
+              CaptureInstall* captures
+          )
+
+    ParamInstall = (
+        string name,
+        number param_id
+    ) unique
+
+    CaptureInstall = (
+        string name,
+        number capture_id,
+        number bind_index,
+        CrochetRealizeRuntime.ValueRef value
+    ) unique
+
+    ClosureInstallBlock = (
+        ClosureInstallStmt* stmts
+    ) unique
+
+    ClosureInstallStmt
+        = LetInstall(LocalInstall local_info, ClosureInstallExpr value)
+        | SetInstall(number local_id, ClosureInstallExpr value)
+        | EffectInstall(ClosureInstallExpr expr)
+        | ReturnInstall(ClosureInstallExpr value)
+        | IfInstall(ClosureInstallExpr cond, ClosureInstallBlock then_body, ClosureInstallBlock else_body)
+        | ForRangeInstall(LocalInstall local_info, ClosureInstallExpr start, ClosureInstallExpr stop, ClosureInstallExpr step, ClosureInstallBlock body)
+        | WhileInstall(ClosureInstallExpr cond, ClosureInstallBlock body)
+
+    LocalInstall = (
+        string name,
+        number local_id
+    ) unique
+
+    ClosureInstallExpr
+        = ParamExpr(number param_id)
+        | CaptureExpr(number capture_id)
+        | LocalExpr(number local_id)
+        | LiteralExpr(CrochetRealizeRuntime.ValueRef value)
+        | CallExpr(ClosureInstallExpr fn, ClosureInstallExpr* args)
+        | IndexExpr(ClosureInstallExpr base, ClosureInstallExpr key)
+        | UnaryExpr(UnaryOp op, ClosureInstallExpr value)
+        | BinaryExpr(BinaryOp op, ClosureInstallExpr lhs, ClosureInstallExpr rhs)
+
+    UnaryOp
+        = NotOp()
+        | NegOp()
+        | LenOp()
+
+    BinaryOp
+        = AddOp()
+        | SubOp()
+        | MulOp()
+        | DivOp()
+        | ModOp()
+        | EqOp()
+        | NeOp()
+        | LtOp()
+        | LeOp()
+        | GtOp()
+        | GeOp()
+        | AndOp()
+        | OrOp()
+
+    InstallMode
+        = SourceArtifact()
+        | ClosureArtifact()
+        | BytecodeArtifact()
+}

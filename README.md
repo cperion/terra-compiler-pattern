@@ -31,6 +31,7 @@ Current backend policy:
 The detailed design docs remain the source of truth:
 
 - `modeling-programs-as-compilers.md`
+- `docs/minimal-asdl-vocabulary.md`
 - `docs/unit-api.md`
 - `unit.t`
 - `AGENTS.md`
@@ -192,6 +193,13 @@ terra unit.t scaffold-project myproj --all-artifacts
 
 Legacy `U.spec { ... }` support has been removed. Use project directories or direct `.asdl` schema files.
 
+The repository also contains a machine-first generated-frontend example project:
+
+- `frontendc/`
+  - authored frontend schema in `frontendc/schema/app.asdl`
+  - direct runtime leaf via `FrontendMachine.Spec:install_generated()`
+  - materialized Lua leaf via `FrontendMachine.Spec:emit_lua()`
+
 Projects may also declare dependencies in `unit_project.lua`:
 
 ```lua
@@ -205,6 +213,10 @@ return {
 `unit` loads dependency schemas first and then installs dependency backend artifacts for the active backend automatically.
 
 ## Examples
+
+Meta-frontend compiler example:
+
+- `frontendc/README.md`
 
 Convention-first inspect example:
 

@@ -1,0 +1,1425 @@
+-- ============================================================================
+-- FrontendC2 ASDL
+-- ----------------------------------------------------------------------------
+-- This schema is a reset based on:
+--   - docs/minimal-asdl-vocabulary.md
+--   - modeling-programs-as-compilers.md
+--
+-- The key correction is architectural, not cosmetic:
+--
+--   source ASDL should mostly be entities, variants, containment, references
+--   lower phases should be projections
+--   when lower branches share structure, introduce a spine
+--   when lower branches need different semantic planes, introduce facets
+--   near the terminal, collapse to canonical Machine and then packaging
+--
+-- So FrontendC2 is organized as:
+--
+--   FrontendSource
+--     authored entities and variants
+--
+--   FrontendChecked
+--     resolved projection with explicit headers/spines
+--
+--   FrontendLowered
+--     machine IR as spine + facets
+--
+--   FrontendMachine
+--     canonical Machine (gen / param / state)
+--
+--   FrontendInstall
+--     packaging / attachment / install shape
+--
+--   FrontendLua
+--     emitted Lua boundary files
+--
+-- Intended boundaries:
+--   FrontendSource.Spec:check()           -> FrontendChecked.Spec
+--   FrontendChecked.Spec:lower()          -> FrontendLowered.Spec
+--   FrontendLowered.Spec:define_machine() -> FrontendMachine.Spec
+--   FrontendMachine.Spec:package()        -> FrontendInstall.Spec
+--   FrontendInstall.Spec:emit_lua()       -> FrontendLua.Spec
+--   FrontendInstall.Spec:install_generated(ctx) -> ctx
+-- ============================================================================
+
+
+module FrontendSource {
+
+    -- ========================================================================
+    -- Source phase: authored entities and variants
+    -- ========================================================================
+    -- Source is intentionally domain-facing.
+    --
+    -- The authored nouns are:
+    --   - Grammar
+    --   - Token
+    --   - Rule
+    --   - Constructor
+    --   - Product
+    --   - Binding
+    --
+    -- These are the persistent things the frontend author edits and saves.
+    --
+    -- Grammar and product are separate entities because the same grammar may
+    -- support several semantic products:
+    --   - validate
+    --   - AST
+    --   - decode
+    --   - executor IR
+    --
+    -- Binding is also an authored entity, but it is deployment-facing rather
+    -- than grammar-facing. Keeping it separate prevents packaging concerns from
+    -- polluting the grammar entities.
+    -- ========================================================================
+
+    Spec = (
+        Frontend frontend,
+        Package package,
+        Diagnostics diagnostics
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Frontend entity
+    -- ------------------------------------------------------------------------
+    Frontend = (
+        Grammar grammar,
+        Constructor* constructors,
+        Product* products
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Grammar entity
+    -- ------------------------------------------------------------------------
+    Grammar = (
+        Input input,
+        TriviaPolicy trivia_policy,
+        SkipRule* skips,
+        Token* tokens,
+        Rule* rules
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Input variant
+    -- ------------------------------------------------------------------------
+    -- This remains source-level because it is a real authored distinction:
+    -- some frontends are text-oriented, some are byte-oriented.
+    -- ------------------------------------------------------------------------
+    Input
+        = Utf8TextInput()
+        | ByteInput()
+
+    TriviaPolicy
+        = DropTrivia()
+        | KeepTrivia()
+
+    SkipRule
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+        | BlockCommentSkip(string opener, string closer)
+        | ByteSkip(ByteSet set)
+
+    -- ------------------------------------------------------------------------
+    -- Token entity + TokenKind variant
+    -- ------------------------------------------------------------------------
+    -- Tokens are source entities because they are independently named and
+    -- edited by the frontend author. They get stable ids.
+    -- ------------------------------------------------------------------------
+    Token = (
+        number id,
+        string name,
+        TokenKind kind
+    ) unique
+
+    TokenKind
+        = FixedToken(string text, WordBoundaryPolicy boundary_policy)
+        | IdentToken(ByteSet start_set, ByteSet continue_set)
+        | QuotedStringToken(StringFormat format)
+        | NumberToken(NumberFormat format)
+        | ByteRunToken(ByteSet allowed_set, RepeatCardinality cardinality)
+
+    WordBoundaryPolicy
+        = NoWordBoundary()
+        | RequiresWordBoundary()
+
+    RepeatCardinality = (
+        number min_count,
+        number max_count
+    ) unique
+
+    StringFormat = (
+        string quote_char,
+        boolean backslash_escapes,
+        boolean multiline
+    ) unique
+
+    NumberFormat = (
+        boolean allow_sign,
+        boolean allow_fraction,
+        boolean allow_exponent,
+        boolean allow_leading_zero
+    ) unique
+
+    ByteSet
+        = AsciiLetters()
+        | AsciiDigits()
+        | Underscore()
+        | ByteLiteral(number value)
+        | ByteRange(number lo, number hi)
+        | Union(ByteSet* parts)
+        | Except(ByteSet base, ByteSet remove)
+
+    -- ------------------------------------------------------------------------
+    -- Rule entity + Expr variant
+    -- ------------------------------------------------------------------------
+    -- Rules are authored entities with stable ids and names.
+    --
+    -- The expression language stays compact and source-facing, but includes the
+    -- machine-significant structural forms explicitly:
+    --   - Delimited
+    --   - SeparatedList
+    --   - Precedence
+    -- ------------------------------------------------------------------------
+    Rule = (
+        number id,
+        string name,
+        RuleMode mode,
+        Expr expr,
+        Result result
+    ) unique
+
+    RuleMode
+        = NormalRule()
+        | InlineRule()
+        | AtomicRule()
+
+    Expr
+        = TokenRef(string token_name)
+        | RuleRef(string rule_name)
+        | Seq(Expr* items)
+        | Choice(Expr* alts)
+        | Optional(Expr inner)
+        | Many(Expr inner)
+        | OneOrMore(Expr inner)
+        | Capture(string capture_name, Expr inner)
+        | Build(Expr inner, Result result)
+        | Delimited(string open_token_name, Expr inner, string close_token_name)
+        | SeparatedList(
+            Expr item,
+            string separator_token_name,
+            ListCardinality cardinality,
+            TrailingSeparatorPolicy trailing_policy
+          )
+        | Precedence(Expr atom, OperatorTier* tiers)
+
+    ListCardinality
+        = ZeroOrMore()
+        | OneOrMore()
+
+    TrailingSeparatorPolicy
+        = NoTrailingSeparator()
+        | OptionalTrailingSeparator()
+
+    OperatorTier = (
+        Associativity associativity,
+        OperatorCase* cases
+    ) unique
+
+    Associativity
+        = LeftAssociative()
+        | RightAssociative()
+        | NonAssociative()
+
+    OperatorCase = (
+        string token_name,
+        Result result
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Semantic constructor entity
+    -- ------------------------------------------------------------------------
+    -- Constructors are explicit source entities. This avoids baking runtime
+    -- fqname/path packaging into the core grammar language.
+    -- ------------------------------------------------------------------------
+    Constructor = (
+        number id,
+        string name,
+        Field* fields
+    ) unique
+
+    Field = (
+        string name,
+        ValueShape shape
+    ) unique
+
+    ValueShape
+        = NodeValue()
+        | ListValue()
+        | StringValue()
+        | BoolValue()
+        | NumberValue()
+        | NullValue()
+        | BytesValue()
+        | UnitValue()
+
+    -- ------------------------------------------------------------------------
+    -- Rule result language
+    -- ------------------------------------------------------------------------
+    -- ReturnCtor refers to a named constructor in the authored semantic domain.
+    -- Product-specific lowering later decides how that semantic intent becomes:
+    --   - validation
+    --   - AST arena nodes
+    --   - decoded host values
+    --   - executor IR
+    -- ------------------------------------------------------------------------
+    Result
+        = ReturnCtor(string ctor_name, FieldResult* fields)
+        | ReturnCapture(string capture_name)
+        | ReturnList(string capture_name)
+        | ReturnScalar(ScalarSource source)
+        | ReturnEmpty()
+
+    FieldResult = (
+        string field_name,
+        ResultSource source
+    ) unique
+
+    ResultSource
+        = CaptureSource(string capture_name)
+        | PresentSource(string capture_name)
+        | JoinedListSource(string capture_name, string separator)
+        | ScalarResultSource(ScalarSource scalar)
+
+    ScalarSource
+        = CaptureScalar(string capture_name)
+        | ConstString(string value)
+        | ConstBool(boolean value)
+        | ConstNull()
+        | DecodeNumber(string capture_name, NumberDecodeMode mode)
+
+    NumberDecodeMode
+        = KeepNumberText()
+        | DecodeHostNumber()
+
+    -- ------------------------------------------------------------------------
+    -- Product entity
+    -- ------------------------------------------------------------------------
+    -- Product is a real authored entity because different semantic products are
+    -- different user-visible deliverables even over one grammar.
+    --
+    -- entry_rule_name is authored here rather than on Grammar so one grammar can
+    -- expose multiple entry products.
+    -- ------------------------------------------------------------------------
+    Product = (
+        number id,
+        string name,
+        string entry_rule_name,
+        ProductKind kind,
+        SourceRefPolicy source_refs
+    ) unique
+
+    ProductKind
+        = ValidateProduct()
+        | AstArenaProduct()
+        | DecodeProduct()
+        | ExecIRProduct()
+
+    SourceRefPolicy
+        = DropSourceRefs()
+        | KeepSourceSpans()
+
+    -- ------------------------------------------------------------------------
+    -- Package entity
+    -- ------------------------------------------------------------------------
+    -- Packaging is authored too, but explicitly separated from grammar/product
+    -- entities so source concerns remain clean.
+    -- ------------------------------------------------------------------------
+    Package = (
+        Binding* bindings
+    ) unique
+
+    Binding = (
+        number id,
+        number product_id,
+        BindingKind kind
+    ) unique
+
+    BindingKind
+        = TokenizedBinding(
+            BoundaryBinding scan,
+            BoundaryBinding parse,
+            TokenRuntimeBinding token_runtime,
+            OutputBinding output
+          )
+        | DirectBinding(
+            BoundaryBinding parse,
+            OutputBinding output
+          )
+
+    BoundaryBinding = (
+        string receiver_fqname,
+        string verb
+    ) unique
+
+    TokenRuntimeBinding = (
+        string token_spec_ctor_fqname,
+        string token_cell_ctor_fqname,
+        string token_span_ctor_fqname
+    ) unique
+
+    OutputBinding = (
+        string output_ctor_fqname
+    ) unique
+
+    Diagnostics
+        = FailFast()
+        | Recovering(RecoveryPoint* points)
+
+    RecoveryPoint = (
+        string name,
+        RecoveryStrategy strategy
+    ) unique
+
+    RecoveryStrategy
+        = SyncToAnyToken(string* token_names)
+        | SyncToCloseDelimiter(string close_token_name)
+        | SkipOneAndResume()
+}
+
+
+module FrontendChecked {
+
+    -- ========================================================================
+    -- Checked projection
+    -- ========================================================================
+    -- This phase resolves names, assigns stable headers, validates structure,
+    -- and preserves the source entities as checked projections.
+    --
+    -- The crucial source -> checked correction is:
+    --   shared identity/addressability moves into explicit headers/spines.
+    --
+    -- Checked spines:
+    --   - TokenHeader
+    --   - RuleHeader
+    --   - ConstructorHeader
+    --   - ProductHeader
+    --   - BindingHeader
+    --
+    -- CaptureHeader is local checked structure rather than a source entity.
+    -- ========================================================================
+
+    Spec = (
+        Frontend frontend,
+        Package package,
+        FrontendSource.Diagnostics diagnostics
+    ) unique
+
+    Frontend = (
+        Grammar grammar,
+        Constructor* constructors,
+        Product* products
+    ) unique
+
+    Grammar = (
+        FrontendSource.Input input,
+        FrontendSource.TriviaPolicy trivia_policy,
+        SkipRule* skips,
+        Token* tokens,
+        Rule* rules
+    ) unique
+
+    SkipRule
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+        | BlockCommentSkip(string opener, string closer)
+        | ByteSkip(CheckedByteSet set)
+
+    -- ------------------------------------------------------------------------
+    -- Token header spine + checked token facet
+    -- ------------------------------------------------------------------------
+    Token = (
+        TokenHeader header,
+        TokenKind kind
+    ) unique
+
+    TokenHeader = (
+        number id,
+        string name,
+        TokenPayloadShape payload_shape
+    ) unique
+
+    TokenPayloadShape
+        = NoTokenPayload()
+        | SpanPayload()
+        | StringPayload()
+        | NumberPayload()
+        | BytesPayload()
+
+    TokenKind
+        = FixedToken(string text, FrontendSource.WordBoundaryPolicy boundary_policy)
+        | IdentToken(CheckedByteSet start_set, CheckedByteSet continue_set)
+        | QuotedStringToken(FrontendSource.StringFormat format)
+        | NumberToken(FrontendSource.NumberFormat format)
+        | ByteRunToken(CheckedByteSet allowed_set, FrontendSource.RepeatCardinality cardinality)
+
+    CheckedByteSet = (
+        number* bitset_words
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Rule header spine + checked rule projection
+    -- ------------------------------------------------------------------------
+    Rule = (
+        RuleHeader header,
+        CheckedExpr expr,
+        CheckedResult result,
+        FirstSet first_set,
+        boolean nullable,
+        FrontendSource.ValueShape value_shape
+    ) unique
+
+    RuleHeader = (
+        number id,
+        string name,
+        FrontendSource.RuleMode mode
+    ) unique
+
+    CheckedExpr
+        = TokenRef(TokenHeader header)
+        | RuleRef(RuleHeader header)
+        | Seq(CheckedExpr* items)
+        | Choice(CheckedExpr* alts)
+        | Optional(CheckedExpr inner)
+        | Many(CheckedExpr inner)
+        | OneOrMore(CheckedExpr inner)
+        | Capture(CaptureHeader header, CheckedExpr inner)
+        | Build(CheckedExpr inner, CheckedResult result)
+        | Delimited(TokenHeader open_header, CheckedExpr inner, TokenHeader close_header)
+        | SeparatedList(
+            CheckedExpr item,
+            TokenHeader separator_header,
+            FrontendSource.ListCardinality cardinality,
+            FrontendSource.TrailingSeparatorPolicy trailing_policy
+          )
+        | Precedence(CheckedExpr atom, CheckedOperatorTier* tiers)
+
+    CheckedOperatorTier = (
+        FrontendSource.Associativity associativity,
+        CheckedOperatorCase* cases
+    ) unique
+
+    CheckedOperatorCase = (
+        TokenHeader header,
+        CheckedResult result
+    ) unique
+
+    CaptureHeader = (
+        string name,
+        number slot_id,
+        CaptureSlotShape slot_shape,
+        FrontendSource.ValueShape value_shape
+    ) unique
+
+    CaptureSlotShape
+        = SingleSlot()
+        | ListSlot()
+        | PresenceSlot()
+
+    CheckedResult
+        = ReturnCtor(ConstructorHeader ctor, FieldResult* fields)
+        | ReturnCapture(CaptureHeader header)
+        | ReturnList(CaptureHeader header)
+        | ReturnScalar(CheckedScalarSource source)
+        | ReturnEmpty()
+
+    -- ------------------------------------------------------------------------
+    -- Constructor header spine + checked constructor projection
+    -- ------------------------------------------------------------------------
+    Constructor = (
+        ConstructorHeader header,
+        FrontendSource.Field* fields
+    ) unique
+
+    ConstructorHeader = (
+        number id,
+        string name
+    ) unique
+
+    FieldResult = (
+        FrontendSource.Field field,
+        ResultSource source
+    ) unique
+
+    ResultSource
+        = CaptureSource(CaptureHeader header)
+        | PresentSource(CaptureHeader header)
+        | JoinedListSource(CaptureHeader header, string separator)
+        | ScalarResultSource(CheckedScalarSource scalar)
+
+    CheckedScalarSource
+        = CaptureScalar(CaptureHeader header)
+        | ConstString(string value)
+        | ConstBool(boolean value)
+        | ConstNull()
+        | DecodeNumber(CaptureHeader header, FrontendSource.NumberDecodeMode mode)
+
+    -- ------------------------------------------------------------------------
+    -- Product header spine + checked product projection
+    -- ------------------------------------------------------------------------
+    Product = (
+        ProductHeader header,
+        RuleHeader entry_rule,
+        FrontendSource.ProductKind kind,
+        FrontendSource.SourceRefPolicy source_refs
+    ) unique
+
+    ProductHeader = (
+        number id,
+        string name
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Binding header spine + checked package projection
+    -- ------------------------------------------------------------------------
+    Package = (
+        Binding* bindings
+    ) unique
+
+    Binding = (
+        BindingHeader header,
+        ProductHeader product,
+        BindingKind kind
+    ) unique
+
+    BindingHeader = (
+        number id
+    ) unique
+
+    BindingKind
+        = TokenizedBinding(
+            FrontendSource.BoundaryBinding scan,
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.TokenRuntimeBinding token_runtime,
+            FrontendSource.OutputBinding output
+          )
+        | DirectBinding(
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.OutputBinding output
+          )
+
+    FirstSet = (
+        number* token_ids,
+        boolean eof_ok
+    ) unique
+}
+
+
+module FrontendLowered {
+
+    -- ========================================================================
+    -- Lowered machine IR = spine + facets
+    -- ========================================================================
+    -- This phase is the main projection into machine-facing structure.
+    --
+    -- Shared lowered spines:
+    --   - GrammarSpine
+    --   - RuleSpine
+    --
+    -- Lowered facets:
+    --   - scan facet
+    --   - lookahead facet
+    --   - exec facet
+    --   - result facet
+    --   - product facet
+    --   - package facet
+    --
+    -- This is much closer to the minimal vocabulary document than one giant
+    -- machine-shaped record carrying everything.
+    -- ========================================================================
+
+    Spec
+        = TokenFrontier(
+            GrammarSpine grammar,
+            TokenScanFacet scan,
+            RuleSpine* rules,
+            RuleLookaheadFacet* lookahead_facets,
+            TokenExecFacet* exec_facets,
+            RuleResultFacet* result_facets,
+            ProductFacet* product_facets,
+            PackageFacet package_facet
+          )
+        | StructuralFrontier(
+            GrammarSpine grammar,
+            StructuralScanFacet scan,
+            RuleSpine* rules,
+            RuleLookaheadFacet* lookahead_facets,
+            StructuralExecFacet* exec_facets,
+            RuleResultFacet* result_facets,
+            ProductFacet* product_facets,
+            PackageFacet package_facet
+          )
+
+    -- ------------------------------------------------------------------------
+    -- Shared grammar spine
+    -- ------------------------------------------------------------------------
+    GrammarSpine = (
+        FrontendChecked.TokenHeader* tokens,
+        FrontendChecked.RuleHeader* rules,
+        FrontendChecked.ConstructorHeader* constructors,
+        FrontendChecked.ProductHeader* products
+    ) unique
+
+    RuleSpine = (
+        FrontendChecked.RuleHeader header,
+        RuleKind kind
+    ) unique
+
+    RuleKind
+        = TerminalRuleKind()
+        | SeqRuleKind()
+        | ChoiceRuleKind()
+        | SeparatedListRuleKind()
+        | PrecedenceRuleKind()
+
+    -- ------------------------------------------------------------------------
+    -- Shared lookahead facet
+    -- ------------------------------------------------------------------------
+    RuleLookaheadFacet = (
+        number rule_id,
+        number first_set_id,
+        boolean nullable
+    ) unique
+
+    FirstSetTable = (
+        number set_id,
+        number* bitset_words
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Token scan facet
+    -- ------------------------------------------------------------------------
+    TokenScanFacet = (
+        FrontendSource.Input input,
+        FrontendSource.TriviaPolicy trivia_policy,
+        TokenSupplyPolicy supply,
+        SkipPlan* skips,
+        FixedDispatch* fixed_dispatches,
+        IdentDispatch* ident_dispatches,
+        QuotedStringDispatch* quoted_string_dispatches,
+        NumberDispatch* number_dispatches,
+        ByteRunDispatch* byte_run_dispatches,
+        FirstSetTable* first_sets
+    ) unique
+
+    TokenSupplyPolicy
+        = LookaheadRing(number width)
+        | BufferedTokens()
+
+    SkipPlan
+        = WhitespaceSkip()
+        | LineCommentSkip(string opener)
+        | BlockCommentSkip(string opener, string closer)
+        | ByteSkip(number* bitset_words)
+
+    FixedDispatch = (
+        number first_byte,
+        FixedCase* cases
+    ) unique
+
+    FixedCase = (
+        string text,
+        FrontendChecked.TokenHeader header,
+        FrontendSource.WordBoundaryPolicy boundary_policy
+    ) unique
+
+    IdentDispatch = (
+        FrontendChecked.TokenHeader header,
+        number* start_bitset_words,
+        number* continue_bitset_words
+    ) unique
+
+    QuotedStringDispatch = (
+        FrontendChecked.TokenHeader header,
+        number quote_byte,
+        boolean backslash_escapes,
+        boolean multiline
+    ) unique
+
+    NumberDispatch = (
+        FrontendChecked.TokenHeader header,
+        FrontendSource.NumberFormat format
+    ) unique
+
+    ByteRunDispatch = (
+        FrontendChecked.TokenHeader header,
+        number* allowed_bitset_words,
+        FrontendSource.RepeatCardinality cardinality
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Structural scan facet
+    -- ------------------------------------------------------------------------
+    StructuralScanFacet = (
+        FrontendSource.Input input,
+        FrontendSource.TriviaPolicy trivia_policy,
+        SkipPlan* skips,
+        StructuralByteClassTable byte_classes,
+        StructuralKeywordDispatch* keyword_dispatches,
+        StructuralStringPlan* string_plans,
+        StructuralNumberPlan* number_plans,
+        FirstByteSetTable* first_byte_sets
+    ) unique
+
+    StructuralByteClassTable = (
+        number* byte_classes
+    ) unique
+
+    StructuralKeywordDispatch = (
+        number first_byte,
+        StructuralWordCase* cases
+    ) unique
+
+    StructuralWordCase = (
+        string text,
+        StructuralKeywordKind kind
+    ) unique
+
+    StructuralKeywordKind
+        = TrueKeyword()
+        | FalseKeyword()
+        | NullKeyword()
+        | FixedWordKeyword(FrontendChecked.TokenHeader header)
+
+    StructuralStringPlan = (
+        number string_id,
+        FrontendSource.StringFormat format
+    ) unique
+
+    StructuralNumberPlan = (
+        number number_id,
+        FrontendSource.NumberFormat format
+    ) unique
+
+    FirstByteSetTable = (
+        number set_id,
+        number* bitset_words
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Token exec facet
+    -- ------------------------------------------------------------------------
+    TokenExecFacet
+        = TerminalExecFacet(
+            number rule_id,
+            FrontendChecked.TokenHeader token,
+            number capture_slot
+          )
+        | SeqExecFacet(
+            number rule_id,
+            Step* steps
+          )
+        | ChoiceExecFacet(
+            number rule_id,
+            ChoiceArm* arms
+          )
+        | SeparatedListExecFacet(
+            number rule_id,
+            Step* item_steps,
+            number item_set_id,
+            FrontendChecked.TokenHeader separator_header,
+            FrontendSource.ListCardinality cardinality,
+            FrontendSource.TrailingSeparatorPolicy trailing_policy,
+            number capture_slot
+          )
+        | PrecedenceExecFacet(
+            number rule_id,
+            Step* atom_steps,
+            PrecedenceTierFacet* tiers
+          )
+
+    ChoiceArm = (
+        number set_id,
+        Step* steps
+    ) unique
+
+    PrecedenceTierFacet = (
+        FrontendSource.Associativity associativity,
+        PrecedenceOpFacet* ops
+    ) unique
+
+    PrecedenceOpFacet = (
+        FrontendChecked.TokenHeader header,
+        ResultPlan result
+    ) unique
+
+    Step
+        = ExpectToken(FrontendChecked.TokenHeader header, number capture_slot)
+        | CallRule(FrontendChecked.RuleHeader header, number capture_slot)
+        | OptionalGroup(number set_id, Step* steps)
+        | RepeatGroup(number set_id, Step* steps)
+        | DelimitedGroup(
+            FrontendChecked.TokenHeader open_header,
+            Step* inner_steps,
+            FrontendChecked.TokenHeader close_header
+          )
+
+    -- ------------------------------------------------------------------------
+    -- Structural exec facet
+    -- ------------------------------------------------------------------------
+    StructuralExecFacet
+        = StructuralTerminalExecFacet(number rule_id, StructuralTerminal terminal)
+        | StructuralSeqExecFacet(number rule_id, StructuralStep* steps)
+        | StructuralChoiceExecFacet(number rule_id, StructuralChoiceArm* arms)
+
+    StructuralTerminal
+        = ExpectFixedToken(FrontendChecked.TokenHeader header, string text, FrontendSource.WordBoundaryPolicy boundary_policy)
+        | ExpectQuotedString(FrontendChecked.TokenHeader header, number string_id)
+        | ExpectNumber(FrontendChecked.TokenHeader header, number number_id)
+        | ExpectByteRun(FrontendChecked.TokenHeader header, number* allowed_bitset_words, FrontendSource.RepeatCardinality cardinality)
+
+    StructuralChoiceArm = (
+        number set_id,
+        StructuralStep* steps
+    ) unique
+
+    StructuralStep
+        = ExpectTerminal(StructuralTerminal terminal, number capture_slot)
+        | StructuralCallRule(FrontendChecked.RuleHeader header, number capture_slot)
+        | StructuralOptionalGroup(number set_id, StructuralStep* steps)
+        | StructuralRepeatGroup(number set_id, StructuralStep* steps)
+        | StructuralDelimitedGroup(number open_byte, StructuralStep* inner_steps, number close_byte)
+        | StructuralSeparatedListGroup(
+            number item_set_id,
+            StructuralStep* item_steps,
+            number separator_byte,
+            FrontendSource.ListCardinality cardinality,
+            FrontendSource.TrailingSeparatorPolicy trailing_policy,
+            number capture_slot
+          )
+
+    -- ------------------------------------------------------------------------
+    -- Shared result facet
+    -- ------------------------------------------------------------------------
+    RuleResultFacet = (
+        number rule_id,
+        ResultPlan result
+    ) unique
+
+    ResultPlan
+        = ReturnCtor(number ctor_id, ArgSource* args)
+        | ReturnSlot(number slot_id)
+        | ReturnListRange(number slot_id)
+        | ReturnScalar(ScalarArgSource scalar)
+        | ReturnEmpty()
+
+    ArgSource
+        = ReadSlot(number slot_id)
+        | ReadPresent(number slot_id)
+        | ReadJoined(number slot_id, string separator)
+        | ReadScalar(ScalarArgSource scalar)
+
+    ScalarArgSource
+        = ReadScalarSlot(number slot_id)
+        | ReadConstString(string value)
+        | ReadConstBool(boolean value)
+        | ReadConstNull()
+        | ReadDecodedNumber(number slot_id, FrontendSource.NumberDecodeMode mode)
+
+    -- ------------------------------------------------------------------------
+    -- Product facet
+    -- ------------------------------------------------------------------------
+    -- Product facets are aligned by product_id and keep builder-specific facts
+    -- separate from the grammar and rule spines.
+    -- ------------------------------------------------------------------------
+    ProductFacet = (
+        number product_id,
+        number entry_rule_id,
+        BuilderFacet builder
+    ) unique
+
+    BuilderFacet
+        = ValidateBuilderFacet()
+        | AstArenaBuilderFacet(ArenaFacet arena)
+        | DecodeBuilderFacet(DecodeFacet decode)
+        | ExecIRBuilderFacet(ExecIRFacet exec_ir)
+
+    ArenaFacet = (
+        boolean keeps_source_spans,
+        boolean uses_list_ranges,
+        boolean interns_scalars
+    ) unique
+
+    DecodeFacet = (
+        boolean decodes_strings,
+        boolean decodes_numbers,
+        boolean builds_arrays,
+        boolean builds_objects
+    ) unique
+
+    ExecIRFacet = (
+        boolean appends_ops,
+        boolean appends_consts,
+        boolean uses_value_ids
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Package facet
+    -- ------------------------------------------------------------------------
+    PackageFacet = (
+        BindingFacet* bindings
+    ) unique
+
+    BindingFacet
+        = TokenizedBindingFacet(
+            number binding_id,
+            number product_id,
+            FrontendSource.BoundaryBinding scan,
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.TokenRuntimeBinding token_runtime,
+            FrontendSource.OutputBinding output
+          )
+        | DirectBindingFacet(
+            number binding_id,
+            number product_id,
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.OutputBinding output
+          )
+}
+
+
+module FrontendMachine {
+
+    -- ========================================================================
+    -- Canonical Machine phase
+    -- ========================================================================
+    -- This is where the lowered spine/facet projections become canonical
+    -- machines with explicit:
+    --   - gen
+    --   - param
+    --   - state
+    --
+    -- Canonical machines are product-specific because builder family is part of
+    -- the machine, not an afterthought.
+    --
+    -- Important carry-forward correction:
+    -- package() happens AFTER define_machine(), so machine phase must retain the
+    -- packaging projection needed by the next phase. Otherwise define_machine()
+    -- would destroy information required for install attachment.
+    -- ========================================================================
+
+    Spec = (
+        ProductMachine* products,
+        PackagePlan package_plan
+    ) unique
+
+    ProductMachine
+        = TokenFrontierMachine(
+            FrontendChecked.ProductHeader product,
+            TokenScanMachine scan,
+            TokenParseMachine parse
+          )
+        | StructuralValidateMachine(
+            FrontendChecked.ProductHeader product,
+            ValidateParseMachine parse
+          )
+        | StructuralFrontierMachine(
+            FrontendChecked.ProductHeader product,
+            StructuralParseMachine parse
+          )
+
+    BuilderFamily
+        = ValidateBuilder()
+        | AstArenaBuilder()
+        | DecodeBuilder()
+        | ExecIRBuilder()
+
+    ValueRep
+        = SpanValue()
+        | ScratchStringValue()
+        | DecodedNumberValue()
+        | NodeRefValue()
+        | ListRangeValue()
+        | UnitValue()
+
+    -- ------------------------------------------------------------------------
+    -- Token frontier machine
+    -- ------------------------------------------------------------------------
+    TokenScanMachine = (
+        TokenScanGen gen,
+        TokenScanParam param,
+        TokenScanState state
+    ) unique
+
+    TokenScanGen = (
+        FrontendSource.Input input,
+        boolean materializes_tokens,
+        boolean retains_trivia,
+        boolean emits_spans,
+        boolean scans_idents,
+        boolean scans_strings,
+        boolean scans_numbers,
+        boolean scans_byte_runs
+    ) unique
+
+    TokenScanParam = (
+        number eof_token_id,
+        number lookahead_width,
+        FrontendLowered.FixedDispatch* fixed_dispatches,
+        FrontendLowered.IdentDispatch* ident_dispatches,
+        FrontendLowered.QuotedStringDispatch* quoted_string_dispatches,
+        FrontendLowered.NumberDispatch* number_dispatches,
+        FrontendLowered.ByteRunDispatch* byte_run_dispatches,
+        ValueRep* payload_reps
+    ) unique
+
+    TokenScanState = (
+        CursorState cursor,
+        LookaheadState lookahead,
+        PayloadScratchState payload_scratch,
+        DiagnosticState diagnostics
+    ) unique
+
+    TokenParseMachine = (
+        BuilderFamily builder,
+        TokenParseGen gen,
+        TokenParseParam param,
+        TokenParseState state
+    ) unique
+
+    TokenParseGen = (
+        boolean uses_first_sets,
+        boolean uses_precedence_loops,
+        boolean uses_separated_lists,
+        boolean uses_delimited_groups,
+        boolean uses_recovery
+    ) unique
+
+    TokenParseParam = (
+        number entry_rule_id,
+        FrontendLowered.FirstSetTable* first_sets,
+        FrontendLowered.RuleSpine* rules,
+        FrontendLowered.RuleLookaheadFacet* lookahead_facets,
+        FrontendLowered.TokenExecFacet* exec_facets,
+        FrontendLowered.RuleResultFacet* result_facets,
+        BuilderParam builder
+    ) unique
+
+    TokenParseState = (
+        ControlStackState control,
+        SlotState slots,
+        BuilderState builder,
+        DiagnosticState diagnostics
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Structural validate machine
+    -- ------------------------------------------------------------------------
+    -- This is the first truly narrow structural product machine.
+    -- It is validate-only, so it drops all result/builder generality and keeps
+    -- only the facts required to accept/reject input structurally.
+    -- ------------------------------------------------------------------------
+    ValidateParseMachine = (
+        ValidateParseGen gen,
+        ValidateParseParam param,
+        ValidateParseState state
+    ) unique
+
+    ValidateParseGen = (
+        FrontendSource.Input input,
+        boolean parses_strings,
+        boolean parses_numbers,
+        boolean parses_keywords,
+        boolean parses_containers,
+        boolean uses_recovery
+    ) unique
+
+    ValidateParseParam = (
+        number entry_rule_id,
+        FrontendLowered.SkipPlan* skips,
+        FrontendLowered.StructuralStringPlan* string_plans,
+        FrontendLowered.StructuralNumberPlan* number_plans,
+        FrontendLowered.FirstByteSetTable* first_byte_sets,
+        ValidateTerminal* terminals,
+        ValidateChoice* choices,
+        ValidateRule* rules,
+        ValidateOp* ops
+    ) unique
+
+    ValidateRule = (
+        number rule_id,
+        number first_set_id,
+        boolean nullable,
+        number entry_pc
+    ) unique
+
+    ValidateTerminal
+        = ExpectFixedToken(string text, FrontendSource.WordBoundaryPolicy boundary_policy)
+        | ExpectQuotedString(number string_id)
+        | ExpectNumber(number number_id)
+        | ExpectByteRun(number* allowed_bitset_words, FrontendSource.RepeatCardinality cardinality)
+
+    ValidateChoice = (
+        number choice_id,
+        ValidateChoiceArm* arms
+    ) unique
+
+    ValidateChoiceArm = (
+        number set_id,
+        number target_pc
+    ) unique
+
+    ValidateOp
+        = ExpectTerminal(number terminal_id)
+        | CallRule(number rule_id)
+        | Choice(number choice_id)
+        | OptionalGroup(number set_id, number body_pc, number next_pc)
+        | RepeatGroup(number set_id, number body_pc, number next_pc)
+        | DelimitedGroup(number open_byte, number body_pc, number close_byte, number next_pc)
+        | SeparatedListGroup(
+            number item_set_id,
+            number body_pc,
+            number separator_byte,
+            FrontendSource.ListCardinality cardinality,
+            FrontendSource.TrailingSeparatorPolicy trailing_policy,
+            number next_pc
+          )
+        | Return()
+
+    ValidateParseState = (
+        CursorState cursor,
+        ControlStackState control,
+        DiagnosticState diagnostics
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Structural frontier machine
+    -- ------------------------------------------------------------------------
+    StructuralParseMachine = (
+        BuilderFamily builder,
+        StructuralParseGen gen,
+        StructuralParseParam param,
+        StructuralParseState state
+    ) unique
+
+    StructuralParseGen = (
+        FrontendSource.Input input,
+        boolean parses_strings,
+        boolean parses_numbers,
+        boolean parses_keywords,
+        boolean parses_containers,
+        boolean uses_recovery
+    ) unique
+
+    StructuralParseParam = (
+        number entry_rule_id,
+        FrontendLowered.SkipPlan* skips,
+        FrontendLowered.StructuralByteClassTable byte_classes,
+        FrontendLowered.StructuralKeywordDispatch* keyword_dispatches,
+        FrontendLowered.StructuralStringPlan* string_plans,
+        FrontendLowered.StructuralNumberPlan* number_plans,
+        FrontendLowered.FirstByteSetTable* first_byte_sets,
+        FrontendLowered.RuleSpine* rules,
+        FrontendLowered.RuleLookaheadFacet* lookahead_facets,
+        FrontendLowered.StructuralExecFacet* exec_facets,
+        FrontendLowered.RuleResultFacet* result_facets,
+        BuilderParam builder
+    ) unique
+
+    StructuralParseState = (
+        CursorState cursor,
+        ControlStackState control,
+        PayloadScratchState payload_scratch,
+        BuilderState builder,
+        DiagnosticState diagnostics
+    ) unique
+
+    -- ------------------------------------------------------------------------
+    -- Shared machine-role records
+    -- ------------------------------------------------------------------------
+    CursorState = (
+        boolean track_line_col
+    ) unique
+
+    LookaheadState = (
+        number capacity
+    ) unique
+
+    PayloadScratchState = (
+        boolean keeps_text_scratch,
+        boolean keeps_string_scratch,
+        boolean keeps_number_scratch,
+        boolean keeps_bytes_scratch
+    ) unique
+
+    DiagnosticState = (
+        boolean enabled,
+        boolean keeps_last_error,
+        boolean keeps_error_span
+    ) unique
+
+    ControlStackState = (
+        number max_depth
+    ) unique
+
+    SlotState = (
+        number slot_count,
+        boolean keeps_list_ranges,
+        boolean keeps_scalar_slots
+    ) unique
+
+    BuilderParam
+        = ValidateBuilderParam()
+        | AstArenaBuilderParam(ArenaLayout layout)
+        | DecodeBuilderParam(DecodeLayout layout)
+        | ExecIRBuilderParam(ExecIRLayout layout)
+
+    BuilderState
+        = ValidateBuilderState()
+        | AstArenaBuilderState(ArenaState arena)
+        | DecodeBuilderState(DecodeState decode)
+        | ExecIRBuilderState(ExecIRState exec_ir)
+
+    -- ------------------------------------------------------------------------
+    -- Package carry-forward plan
+    -- ------------------------------------------------------------------------
+    -- This is not install packaging yet. It is the preserved product/binding
+    -- projection that package() consumes after canonical machine definition.
+    -- ------------------------------------------------------------------------
+    PackagePlan = (
+        BindingPlan* bindings
+    ) unique
+
+    BindingPlan
+        = TokenizedBindingPlan(
+            FrontendChecked.ProductHeader product,
+            FrontendSource.BoundaryBinding scan,
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.TokenRuntimeBinding token_runtime,
+            FrontendSource.OutputBinding output
+          )
+        | DirectBindingPlan(
+            FrontendChecked.ProductHeader product,
+            FrontendSource.BoundaryBinding parse,
+            FrontendSource.OutputBinding output
+          )
+
+    ArenaLayout = (
+        boolean keeps_source_spans,
+        boolean uses_list_ranges,
+        boolean interns_scalars
+    ) unique
+
+    ArenaState = (
+        boolean needs_node_arena,
+        boolean needs_child_arena,
+        boolean needs_scalar_pool
+    ) unique
+
+    DecodeLayout = (
+        boolean decodes_strings,
+        boolean decodes_numbers,
+        boolean builds_arrays,
+        boolean builds_objects
+    ) unique
+
+    DecodeState = (
+        boolean keeps_container_frames,
+        boolean keeps_key_scratch,
+        boolean keeps_value_stack
+    ) unique
+
+    ExecIRLayout = (
+        boolean appends_ops,
+        boolean appends_consts,
+        boolean uses_value_ids
+    ) unique
+
+    ExecIRState = (
+        boolean keeps_op_buffer,
+        boolean keeps_const_buffer,
+        boolean keeps_temp_values
+    ) unique
+}
+
+
+module FrontendInstall {
+
+    -- ========================================================================
+    -- Packaging / install projection
+    -- ========================================================================
+    -- Packaging is downstream of canonical machine definition.
+    -- It consumes source binding intent and machine products and turns them into
+    -- install-ready attachment records.
+    -- ========================================================================
+
+    Spec = (
+        ProductInstall* products
+    ) unique
+
+    ProductInstall
+        = TokenizedInstall(
+            FrontendChecked.ProductHeader product,
+            TokenScanInstall scan,
+            TokenParseInstall parse
+          )
+        | DirectInstall(
+            FrontendChecked.ProductHeader product,
+            DirectParseInstall parse
+          )
+
+    Path = (
+        string* parts
+    ) unique
+
+    BoundaryHeader = (
+        Path receiver_path,
+        string verb
+    ) unique
+
+    CtorRef = (
+        number ctor_id,
+        Path ctor_path
+    ) unique
+
+    TokenScanInstall = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        Path token_cell_ctor_path,
+        Path span_ctor_path,
+        FrontendMachine.TokenScanMachine machine
+    ) unique
+
+    TokenParseInstall = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        CtorRef* result_ctors,
+        FrontendMachine.TokenParseMachine machine
+    ) unique
+
+    DirectParseInstall = (
+        BoundaryHeader header,
+        Path output_spec_ctor_path,
+        CtorRef* result_ctors,
+        FrontendMachine.StructuralParseMachine machine
+    ) unique
+}
+
+
+module FrontendLua {
+
+    -- ========================================================================
+    -- Lua materialization
+    -- ========================================================================
+    -- Thin emitted-file projection.
+    -- ========================================================================
+
+    Spec = (
+        BoundaryFile* files
+    ) unique
+
+    BoundaryFile = (
+        string path,
+        string receiver_fqname,
+        string verb,
+        string lua_source
+    ) unique
+}

@@ -18,20 +18,21 @@ local function base_components(T)
         return T.FrontendMachine.Path({ ... })
     end
 
-    local function Header(name, id, value_shape)
-        return T.FrontendChecked.TokenHeader(name, id, value_shape)
+    local function Header(name, id, payload_shape)
+        return T.FrontendChecked.TokenHeader(name, id, payload_shape)
     end
 
-    local no_value = T.FrontendChecked.NoValue
+    local no_payload = T.FrontendChecked.NoTokenPayload
+    local string_payload = T.FrontendChecked.StringTokenPayload
     local string_value = T.FrontendChecked.StringValue
 
-    local module_header = Header("ModuleKw", 1, no_value)
-    local lbrace_header = Header("LBrace", 2, no_value)
-    local rbrace_header = Header("RBrace", 3, no_value)
-    local ident_header = Header("Ident", 4, no_value)
-    local eof_header = Header("Eof", 5, no_value)
+    local module_header = Header("ModuleKw", 1, no_payload)
+    local lbrace_header = Header("LBrace", 2, no_payload)
+    local rbrace_header = Header("RBrace", 3, no_payload)
+    local ident_header = Header("Ident", 4, string_payload)
+    local eof_header = Header("Eof", 5, no_payload)
 
-    local target = T.FrontendSource.BoundaryTarget(
+    local target = T.FrontendSource.Target(
         "TargetText.Spec",
         "tokenize",
         "TargetToken.Spec",
@@ -80,7 +81,8 @@ local function base_components(T)
 
     return {
         Path = Path,
-        no_value = no_value,
+        no_payload = no_payload,
+        string_payload = string_payload,
         string_value = string_value,
         module_header = module_header,
         lbrace_header = lbrace_header,
@@ -130,7 +132,9 @@ function M.new_tokenize_machine_and_target_ctx(T)
                             return ch == 95 or (ch >= 48 and ch <= 57) or (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122)
                         end)
                     ),
-                }
+                },
+                {},
+                {}
             )
         ),
         T.FrontendMachine.ParseInstall(
@@ -157,8 +161,9 @@ function M.new_tokenize_machine_and_target_ctx(T)
                     T.FrontendLowered.FirstSetTable(1, c.first_set_words),
                 },
                 {
-                    T.FrontendLowered.SeqRule(
+                    T.FrontendLowered.RulePlan(
                         T.FrontendChecked.RuleHeader("entry", 1),
+                        T.FrontendLowered.SeqRuleKind,
                         {
                             T.FrontendLowered.ExpectToken(c.module_header, 0),
                             T.FrontendLowered.ExpectToken(c.ident_header, 1),
@@ -166,6 +171,7 @@ function M.new_tokenize_machine_and_target_ctx(T)
                             T.FrontendLowered.ExpectToken(c.ident_header, 2),
                             T.FrontendLowered.ExpectToken(c.rbrace_header, 0),
                         },
+                        {},
                         T.FrontendLowered.ReturnCtor(1, {
                             T.FrontendLowered.ReadSlot(1),
                             T.FrontendLowered.ReadSlot(2),
@@ -177,6 +183,54 @@ function M.new_tokenize_machine_and_target_ctx(T)
     )
 
     return machine, c.target_ctx
+end
+
+function M.new_source_spec_and_target_ctx(T)
+    local c = base_components(T)
+
+    local source = T.FrontendSource.Spec(
+        c.target,
+        T.FrontendSource.Lexer(
+            {
+                T.FrontendSource.WhitespaceSkip,
+                T.FrontendSource.LineCommentSkip("#"),
+            },
+            {
+                T.FrontendSource.KeywordToken("ModuleKw", "module"),
+                T.FrontendSource.PunctToken("LBrace", "{"),
+                T.FrontendSource.PunctToken("RBrace", "}"),
+                T.FrontendSource.IdentToken(
+                    "Ident",
+                    T.FrontendSource.Union({ T.FrontendSource.AsciiLetters, T.FrontendSource.Underscore }),
+                    T.FrontendSource.Union({ T.FrontendSource.AsciiLetters, T.FrontendSource.AsciiDigits, T.FrontendSource.Underscore })
+                ),
+            }
+        ),
+        T.FrontendSource.Parser(
+            "entry",
+            {
+                T.FrontendSource.Rule(
+                    "entry",
+                    T.FrontendSource.Seq({
+                        T.FrontendSource.TokenRef("ModuleKw"),
+                        T.FrontendSource.Capture("name", T.FrontendSource.TokenRef("Ident")),
+                        T.FrontendSource.TokenRef("LBrace"),
+                        T.FrontendSource.Capture("inner", T.FrontendSource.TokenRef("Ident")),
+                        T.FrontendSource.TokenRef("RBrace"),
+                    }),
+                    T.FrontendSource.ReturnCtor(
+                        "TargetSource.Document",
+                        {
+                            T.FrontendSource.FieldResult("name", T.FrontendSource.CaptureSource("name")),
+                            T.FrontendSource.FieldResult("inner", T.FrontendSource.CaptureSource("inner")),
+                        }
+                    )
+                ),
+            }
+        )
+    )
+
+    return source, c.target_ctx
 end
 
 function M.new_lowered_spec_and_target_ctx(T)
@@ -211,7 +265,9 @@ function M.new_lowered_spec_and_target_ctx(T)
                         return ch == 95 or (ch >= 48 and ch <= 57) or (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122)
                     end)
                 ),
-            }
+            },
+            {},
+            {}
         ),
         T.FrontendLowered.ParseMachine(
             T.FrontendChecked.RuleHeader("entry", 1),
@@ -231,8 +287,9 @@ function M.new_lowered_spec_and_target_ctx(T)
                 T.FrontendLowered.FirstSetTable(1, c.first_set_words),
             },
             {
-                T.FrontendLowered.SeqRule(
+                T.FrontendLowered.RulePlan(
                     T.FrontendChecked.RuleHeader("entry", 1),
+                    T.FrontendLowered.SeqRuleKind,
                     {
                         T.FrontendLowered.ExpectToken(c.module_header, 0),
                         T.FrontendLowered.ExpectToken(c.ident_header, 1),
@@ -240,6 +297,7 @@ function M.new_lowered_spec_and_target_ctx(T)
                         T.FrontendLowered.ExpectToken(c.ident_header, 2),
                         T.FrontendLowered.ExpectToken(c.rbrace_header, 0),
                     },
+                    {},
                     T.FrontendLowered.ReturnCtor(1, {
                         T.FrontendLowered.ReadSlot(1),
                         T.FrontendLowered.ReadSlot(2),

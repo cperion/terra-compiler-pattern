@@ -1,0 +1,357 @@
+-- ============================================================================
+-- more-fun
+-- ----------------------------------------------------------------------------
+-- A LuaJIT-first iterator optimization project.
+--
+-- The source language is an iterator pipeline:
+--
+--   source + transforms + terminal
+--
+-- The design goal is not to execute that pipeline directly. The design goal is
+-- to lower it through increasingly explicit phases until the final LuaJIT leaf
+-- can install one tiny monomorphic closure.
+--
+-- The intended stack is:
+--
+--   MoreFunSource
+--     authored pipeline language
+--
+--   MoreFunLowered
+--     normalized source family + fused transform/control shape
+--
+--   MoreFunMachine
+--     explicit loop/terminal machine IR
+--
+--   MoreFunLuaJIT
+--     LuaJIT-specific fast-plan variants that have shaved out genericity before
+--     final closure installation
+--
+-- Architectural emphasis:
+--
+--   - source models pipeline intent
+--   - lowered phases fuse and normalize
+--   - machine phase makes gen/param/state-shaped execution obvious
+--   - LuaJIT phase specializes by loop family and terminal family
+--   - final closure should not interpret the pipeline anymore
+-- ============================================================================
+
+module MoreFunRuntime {
+
+    -- ------------------------------------------------------------------------
+    -- Runtime-bound handles carried through the design.
+    -- ------------------------------------------------------------------------
+    -- These are phase-local runtime references, not user-authored persisted
+    -- entities. They exist so the project can model callable payloads and live
+    -- inputs explicitly while still keeping the structural lowering honest.
+    -- ------------------------------------------------------------------------
+
+    ArrayInput = (
+        string debug_name,
+        any values
+    ) unique
+
+    StringInput = (
+        string debug_name,
+        string text
+    ) unique
+
+    CallRef = (
+        string debug_name,
+        function fn
+    ) unique
+
+    ValueRef = (
+        string debug_name,
+        any value
+    ) unique
+}
+
+module MoreFunSource {
+
+    -- ------------------------------------------------------------------------
+    -- Authored pipeline language
+    -- ------------------------------------------------------------------------
+    -- This is the compact source language for iterator optimization work.
+    --
+    -- It captures:
+    --   - source family intent
+    --   - transform chain intent
+    --   - terminal intent
+    --
+    -- It does NOT yet say what exact loop will run, what transforms can be
+    -- fused, or which terminal-specific template the backend should install.
+    -- ------------------------------------------------------------------------
+
+    Spec = (
+        Source source,
+        Pipe pipe,
+        Terminal terminal
+    ) unique
+
+    Source
+        = ArraySource(MoreFunRuntime.ArrayInput input)
+        | RangeSource(number start, number stop, number step)
+        | StringSource(MoreFunRuntime.StringInput input)
+        | ByteStringSource(MoreFunRuntime.StringInput input)
+        | RawIterSource(MoreFunRuntime.CallRef gen, MoreFunRuntime.ValueRef param, MoreFunRuntime.ValueRef state0)
+        | ChainSource(Source* parts)
+
+    Pipe
+        = EndPipe()
+        | MapPipe(MoreFunRuntime.CallRef fn, Pipe next)
+        | FilterPipe(Predicate pred, Pipe next)
+        | TakePipe(number count, Pipe next)
+        | DropPipe(number count, Pipe next)
+
+    Predicate
+        = CallPred(MoreFunRuntime.CallRef fn)
+        | EqNumberPred(number rhs)
+        | GtNumberPred(number rhs)
+        | LtNumberPred(number rhs)
+        | ModEqNumberPred(number divisor, number remainder)
+
+    Terminal
+        = SumTerminal()
+        | FoldlTerminal(MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | ToTableTerminal()
+        | HeadTerminal()
+        | NthTerminal(number index)
+        | AnyTerminal(Predicate pred)
+        | AllTerminal(Predicate pred)
+        | MinTerminal()
+        | MaxTerminal()
+}
+
+module MoreFunLowered {
+
+    -- ------------------------------------------------------------------------
+    -- Order-preserving lowered pipeline shape
+    -- ------------------------------------------------------------------------
+    -- Responsibilities:
+    --   - normalize source families
+    --   - preserve transform order faithfully
+    --   - rename source-level filter intent to the guard vocabulary used by
+    --     later machine phases
+    --
+    -- This phase deliberately does NOT fuse transforms into the machine-facing
+    -- fast body shape. Fusion belongs later, once the machine leaves tell us
+    -- exactly which ordered patterns are worth specializing.
+    -- ------------------------------------------------------------------------
+
+    Spec = (
+        Source source,
+        Pipe pipe,
+        Terminal terminal
+    ) unique
+
+    Source
+        = ArraySource(MoreFunRuntime.ArrayInput input)
+        | RangeSource(number start, number stop, number step)
+        | StringSource(MoreFunRuntime.StringInput input)
+        | ByteStringSource(MoreFunRuntime.StringInput input)
+        | RawIterSource(MoreFunRuntime.CallRef gen, MoreFunRuntime.ValueRef param, MoreFunRuntime.ValueRef state0)
+        | ChainSource(Source* parts)
+
+    Pipe
+        = EndPipe()
+        | MapPipe(MoreFunRuntime.CallRef fn, Pipe next)
+        | GuardPipe(Predicate pred, Pipe next)
+        | TakePipe(number count, Pipe next)
+        | DropPipe(number count, Pipe next)
+
+    Predicate
+        = CallPred(MoreFunRuntime.CallRef fn)
+        | EqNumberPred(number rhs)
+        | GtNumberPred(number rhs)
+        | LtNumberPred(number rhs)
+        | ModEqNumberPred(number divisor, number remainder)
+
+    Terminal
+        = SumTerminal()
+        | FoldlTerminal(MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | ToTableTerminal()
+        | HeadTerminal()
+        | NthTerminal(number index)
+        | AnyTerminal(Predicate pred)
+        | AllTerminal(Predicate pred)
+        | MinTerminal()
+        | MaxTerminal()
+}
+
+module MoreFunMachine {
+
+    -- ------------------------------------------------------------------------
+    -- Explicit machine IR
+    -- ------------------------------------------------------------------------
+    -- This phase makes the eventual execution machine obvious.
+    --
+    -- It should answer:
+    --   - what exact loop family runs?
+    --   - what body plan runs inside that loop?
+    --   - what terminal machine is being installed?
+    -- ------------------------------------------------------------------------
+
+    Spec = (
+        Loop loop,
+        BodyPlan body,
+        TerminalPlan terminal
+    ) unique
+
+    Loop
+        = ArrayLoop(MoreFunRuntime.ArrayInput input)
+        | RangeLoop(number start, number stop, number step)
+        | StringLoop(MoreFunRuntime.StringInput input)
+        | ByteStringLoop(MoreFunRuntime.StringInput input)
+        | RawWhileLoop(MoreFunRuntime.CallRef gen, MoreFunRuntime.ValueRef param, MoreFunRuntime.ValueRef state0)
+        | ChainLoop(Loop* parts)
+
+    BodyPlan
+        = FastBody(MapStep* maps, GuardStep* guards, Control control)
+        | GenericBody(Pipe pipe)
+
+    Pipe
+        = EndPipe()
+        | MapPipe(MoreFunRuntime.CallRef fn, Pipe next)
+        | GuardPipe(Predicate pred, Pipe next)
+        | TakePipe(number count, Pipe next)
+        | DropPipe(number count, Pipe next)
+
+    Predicate
+        = CallPred(MoreFunRuntime.CallRef fn)
+        | EqNumberPred(number rhs)
+        | GtNumberPred(number rhs)
+        | LtNumberPred(number rhs)
+        | ModEqNumberPred(number divisor, number remainder)
+
+    MapStep = (
+        MoreFunRuntime.CallRef fn
+    ) unique
+
+    GuardStep = (
+        Predicate pred
+    ) unique
+
+    Control = (
+        number drop_count,
+        number take_count,
+        boolean bounded_take
+    ) unique
+
+    TerminalPlan
+        = SumPlan()
+        | FoldlPlan(MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | ToTablePlan()
+        | HeadPlan()
+        | NthPlan(number index)
+        | AnyPlan(Predicate pred)
+        | AllPlan(Predicate pred)
+        | MinPlan()
+        | MaxPlan()
+}
+
+module MoreFunLuaJIT {
+
+    -- ------------------------------------------------------------------------
+    -- LuaJIT fast-plan variants
+    -- ------------------------------------------------------------------------
+    -- This phase is where genericity should be shaved out before final closure
+    -- installation.
+    --
+    -- In particular, this phase should decide whether we can use a dedicated
+    -- array/range fast template or must fall back to a more generic machine.
+    --
+    -- IMPORTANT:
+    --   the terminal receiver here is Plan itself.
+    --
+    -- The leaf should compile one already-specialized fast-plan variant into
+    -- one Unit. A wrapper Spec record would only hide the real machine-near
+    -- noun and make the bottom-up workflow less honest.
+    -- ------------------------------------------------------------------------
+
+    Plan
+        = ArraySum(ArrayLoop loop, BodyPlan body)
+        | ArrayFoldl(ArrayLoop loop, BodyPlan body, MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | ArrayToTable(ArrayLoop loop, BodyPlan body)
+        | ArrayHead(ArrayLoop loop, BodyPlan body)
+        | ArrayNth(ArrayLoop loop, BodyPlan body, number index)
+        | ArrayAny(ArrayLoop loop, BodyPlan body, Predicate pred)
+        | ArrayAll(ArrayLoop loop, BodyPlan body, Predicate pred)
+        | ArrayMin(ArrayLoop loop, BodyPlan body)
+        | ArrayMax(ArrayLoop loop, BodyPlan body)
+
+        | RangeSum(RangeLoop loop, BodyPlan body)
+        | RangeFoldl(RangeLoop loop, BodyPlan body, MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | RangeToTable(RangeLoop loop, BodyPlan body)
+        | RangeHead(RangeLoop loop, BodyPlan body)
+        | RangeNth(RangeLoop loop, BodyPlan body, number index)
+        | RangeAny(RangeLoop loop, BodyPlan body, Predicate pred)
+        | RangeAll(RangeLoop loop, BodyPlan body, Predicate pred)
+        | RangeMin(RangeLoop loop, BodyPlan body)
+        | RangeMax(RangeLoop loop, BodyPlan body)
+
+        | StringFoldl(StringLoop loop, BodyPlan body, MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | StringToTable(StringLoop loop, BodyPlan body)
+        | StringHead(StringLoop loop, BodyPlan body)
+        | StringNth(StringLoop loop, BodyPlan body, number index)
+        | StringAny(StringLoop loop, BodyPlan body, Predicate pred)
+        | StringAll(StringLoop loop, BodyPlan body, Predicate pred)
+        | StringMin(StringLoop loop, BodyPlan body)
+        | StringMax(StringLoop loop, BodyPlan body)
+
+        | ByteStringSum(ByteStringLoop loop, BodyPlan body)
+        | ByteStringFoldl(ByteStringLoop loop, BodyPlan body, MoreFunRuntime.CallRef reducer, MoreFunRuntime.ValueRef init)
+        | ByteStringToTable(ByteStringLoop loop, BodyPlan body)
+        | ByteStringHead(ByteStringLoop loop, BodyPlan body)
+        | ByteStringNth(ByteStringLoop loop, BodyPlan body, number index)
+        | ByteStringAny(ByteStringLoop loop, BodyPlan body, Predicate pred)
+        | ByteStringAll(ByteStringLoop loop, BodyPlan body, Predicate pred)
+        | ByteStringMin(ByteStringLoop loop, BodyPlan body)
+        | ByteStringMax(ByteStringLoop loop, BodyPlan body)
+
+        | GenericInstall(MoreFunMachine.Spec machine)
+
+    ArrayLoop = (
+        MoreFunRuntime.ArrayInput input
+    ) unique
+
+    RangeLoop = (
+        number start,
+        number stop,
+        number step
+    ) unique
+
+    StringLoop = (
+        MoreFunRuntime.StringInput input
+    ) unique
+
+    ByteStringLoop = (
+        MoreFunRuntime.StringInput input
+    ) unique
+
+    BodyPlan = (
+        MapStep* maps,
+        GuardStep* guards,
+        Control control
+    ) unique
+
+    Predicate
+        = CallPred(MoreFunRuntime.CallRef fn)
+        | EqNumberPred(number rhs)
+        | GtNumberPred(number rhs)
+        | LtNumberPred(number rhs)
+        | ModEqNumberPred(number divisor, number remainder)
+
+    MapStep = (
+        MoreFunRuntime.CallRef fn
+    ) unique
+
+    GuardStep = (
+        Predicate pred
+    ) unique
+
+    Control = (
+        number drop_count,
+        number take_count,
+        boolean bounded_take
+    ) unique
+}

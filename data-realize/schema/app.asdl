@@ -1,0 +1,172 @@
+-- ============================================================================
+-- data-realize
+-- ----------------------------------------------------------------------------
+-- A unit project for realizing known data representation languages into hosted
+-- Lua-side installed artifacts.
+--
+-- Initial focus:
+--   - JSON / TOML / JSON Lines
+--   - decode-to-table machine families
+--   - host contracts like return / assign / patch
+--
+-- Pipeline
+-- --------
+--   DataRealizeSource
+--     -> check
+--     -> DataRealizeChecked
+--     -> define_machine
+--     -> DataRealizeMachine
+--     -> prepare_install
+--     -> DataRealizeLua
+--     -> install
+-- ============================================================================
+
+module DataRealizeSource {
+    Spec = (
+        Binding* bindings,
+        PackageMode package
+    ) unique
+
+    Binding = (
+        number id,
+        string name,
+        InputSource input,
+        RepresentationLanguage language,
+        RealizationContract contract
+    ) unique
+
+    InputSource
+        = InlineText(string text)
+        | FileText(string path)
+
+    RepresentationLanguage
+        = JsonLanguage()
+        | TomlLanguage()
+        | JsonLinesLanguage()
+
+    RealizationContract
+        = ReturnValueContract()
+        | AssignGlobalContract(string variable_name)
+        | PatchGlobalContract(string variable_name)
+
+    PackageMode
+        = SourceMode()
+        | ClosureMode()
+        | BytecodeMode()
+}
+
+module DataRealizeChecked {
+    Spec = (
+        Binding* bindings,
+        PackageMode package
+    ) unique
+
+    Binding = (
+        BindingHeader header,
+        InputSource input,
+        RepresentationLanguage language,
+        RealizationContract contract
+    ) unique
+
+    BindingHeader = (
+        number id,
+        string name
+    ) unique
+
+    InputSource
+        = InlineText(string text)
+        | FileText(string path)
+
+    RepresentationLanguage
+        = JsonLanguage()
+        | TomlLanguage()
+        | JsonLinesLanguage()
+
+    RealizationContract
+        = ReturnValueContract()
+        | AssignGlobalContract(string variable_name)
+        | PatchGlobalContract(string variable_name)
+
+    PackageMode
+        = SourceMode()
+        | ClosureMode()
+        | BytecodeMode()
+}
+
+module DataRealizeMachine {
+    Spec = (
+        BindingMachine* bindings,
+        PackageMode package
+    ) unique
+
+    BindingMachine = (
+        BindingHeader header,
+        InputPlan input,
+        DecodeMachine machine,
+        InstallContract contract
+    ) unique
+
+    BindingHeader = (
+        number id,
+        string name
+    ) unique
+
+    InputPlan
+        = InlineText(string text)
+        | FileText(string path)
+
+    DecodeMachine
+        = JsonToTableMachine()
+        | TomlToTableMachine()
+        | JsonLinesToTableMachine()
+
+    InstallContract
+        = ReturnValueContract()
+        | AssignGlobalContract(string variable_name)
+        | PatchGlobalContract(string variable_name)
+
+    PackageMode
+        = SourceMode()
+        | ClosureMode()
+        | BytecodeMode()
+}
+
+module DataRealizeLua {
+    Spec = (
+        BindingArtifact* bindings,
+        ArtifactMode artifact_mode
+    ) unique
+
+    BindingArtifact
+        = SourceArtifact(
+              string name,
+              number id,
+              string artifact_key,
+              string source,
+              InstallContract contract
+          )
+        | ClosureArtifact(
+              string name,
+              number id,
+              string artifact_key,
+              string source,
+              InstallContract contract
+          )
+        | BytecodeArtifact(
+              string name,
+              number id,
+              string artifact_key,
+              string source,
+              InstallContract contract
+          )
+
+    InstallContract
+        = ReturnValueContract()
+        | AssignGlobalContract(string variable_name)
+        | PatchGlobalContract(string variable_name)
+
+    ArtifactMode
+        = SourceArtifactMode()
+        | ClosureArtifactMode()
+        | BytecodeArtifactMode()
+}

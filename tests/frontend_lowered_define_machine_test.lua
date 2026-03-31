@@ -27,7 +27,7 @@ local function test_define_machine_builds_runtime_shape()
     assert(machine.tokenize.machine.eof_header.token_id == 5)
     assert(#machine.parse.result_ctors == 1)
     assert(#machine.parse.machine.rules == 1)
-    assert(machine.parse.machine.rules[1].kind == "SeqRule")
+    assert(machine.parse.machine.rules[1].kind.kind == "SeqRuleKind")
     assert(machine.parse.machine.rules[1].result.kind == "ReturnCtor")
 
     machine:install_generated(target_ctx)

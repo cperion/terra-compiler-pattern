@@ -1056,6 +1056,8 @@ Load a project from:
 
 Legacy `.lua/.t` spec sources are removed.
 
+Current convention-first preference remains a project directory with a flat `boundaries/` layout. As the broader `unit` vision evolves, the framework should continue to treat flat layout as the primary default rather than as a fallback.
+
 ### Project dependencies
 
 A project may declare:
@@ -1112,6 +1114,8 @@ Default convention:
 
 - flat layout
 - lower-snake filenames
+
+This flat layout is the opinionated default and the preferred project story. Tree layout remains available, but flat is what `unit` recommends first.
 
 Examples:
 
@@ -1500,9 +1504,12 @@ myproj/
     ui_decl_document_profile.lua
 ```
 
+The preferred layout is intentionally **flat**. This is the opinionated default: cheap to adopt, easy to scan, and consistent with receiver-owned artifacts. Tree layout is optional, but not the primary convention.
+
 ### 11.1 Defaults
 
 - default layout: `flat`
+- flat is the preferred and opinionated default
 - filenames: lower-snake
 - receiver owns all its artifacts
 - semantic sidecars:

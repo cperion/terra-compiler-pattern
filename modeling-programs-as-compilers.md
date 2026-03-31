@@ -4,64 +4,130 @@
 
 ### 1.1 The ASDL is a language
 
-The ASDL is not a data format. It is not a schema. It is not a description of what the program stores.
+The ASDL is not a data format. It is not just a schema. It is not merely a description of what the program stores.
 
 The ASDL is a LANGUAGE.
 
-The source ASDL is the input language of a compiler. The user is the programmer. The UI is the IDE. Every user gesture is a program edit. Every edit produces a new program (a new ASDL tree). The compiler compiles it. The output runs.
+The source ASDL is the input language of a compiler. The user is the programmer. The UI is the IDE. Every user gesture is a program edit. Every edit produces a new program — a new ASDL tree. The compiler compiles it. The output runs.
 
 Getting the ASDL right means getting the LANGUAGE right. A good language has:
-- Clear nouns (types that correspond to domain concepts)
-- Clear verbs (edits that produce new valid programs)
-- Orthogonal features (independent fields that don't interfere)
-- Completeness (every valid state is expressible)
-- Minimality (no redundancy, no derived values)
-- Composability (small pieces combine into larger programs)
+- clear nouns
+- clear verbs
+- orthogonal features
+- completeness
+- minimality
+- composability
 
-These are the same properties that make a PROGRAMMING LANGUAGE good. Because that's what the source ASDL is — a domain-specific programming language whose programs are domain artifacts (songs, documents, spreadsheets, games) and whose compiler produces executables that realize those artifacts.
+These are the same properties that make a programming language good, because that is what the source ASDL is: a domain-specific programming language whose programs are domain artifacts — songs, documents, spreadsheets, scenes, grammars, tools — and whose compiler produces executable machinery that realizes those artifacts.
 
-Every interactive program is a compiler. The source language is the UI. The ASDL is the IR. The pipeline is the optimizer. But the most important product in the middle is not "a function." It is a MACHINE. More precisely, the canonical lower stack of the pattern is:
+The ASDL is the architecture. Everything else is downstream.
+
+### 1.2 Interactive software is a compiler
+
+Every interactive program takes human gestures — clicks, keystrokes, drags, edits, messages, file updates — and turns them into machine behavior — pixels, samples, queries, responses, network bytes, driver calls.
+
+Between intent and execution there is a gap. The user thinks in domain concepts:
+- “make this louder”
+- “insert a paragraph here”
+- “parse this grammar”
+- “connect these nodes”
+- “install this realization”
+
+The machine does not think in those terms. It works in registers, memory layouts, loops, buffers, closures, function pointers, and driver callbacks.
+
+Traditional systems bridge that gap at runtime by repeatedly interpreting broad authored structure. Every frame, every callback, every update, they re-answer some version of:
+
+> what does this node mean, really?
+
+The compiler pattern bridges the gap earlier. It treats the program as authored source, compiles that source into narrower lower forms, produces a machine, realizes that machine on a backend, and runs the installed artifact until the source changes again.
+
+That is the core claim:
+
+> interactive software is best understood as a live compiler from authored intent to executable machinery.
+
+### 1.3 The semantic product is a machine
+
+The most important output of the compiler is not “a function.” It is a MACHINE.
+
+More precisely, the lower stack of the pattern is:
 
 - **transitions**
 - **Machine IR**
 - **canonical Machine** (`gen`, `param`, `state`)
-- **backend lowering**
-- **Unit runtime** (`Unit { fn, state_t }`)
+- **proto language**
+- **Unit / installed artifact**
 
-Or stated as a flow:
+Or as a flow:
 
 ```text
 transitions
 → Machine IR
 → canonical Machine
-→ backend lowering
-→ Unit runtime
+→ proto language
+→ Unit / installed artifact
 ```
 
-So the deeper statement is not just that the ASDL becomes code. It is that the ASDL becomes a machine, and `Unit` is how that machine is packaged for installation and execution on a backend.
+This distinction matters.
 
-And because the ASDL and the pipeline are pure — ASDL nodes are immutable values, transitions are memoized functions, compositions are structural — the entire design is target-independent. The same ASDL types, the same phases, and the same transitions can realize Terra/LLVM native code, LuaJIT-specialized closures, JavaScript, or WASM. Only the leaf compilation — the terminal boundary where ASDL becomes executable machinery — touches the backend. The modeling method described in this document produces an architecture that is portable across targets without redesign, because the design decisions live in the pure layer, and the pure layer doesn't know what machine it's on.
+A `Unit` is not the first machine concept. A `Unit` is the packaged installed result. The semantic executable abstraction above it is the canonical Machine:
+- `gen` — the execution rule
+- `param` — the stable machine input
+- `state` — the mutable runtime-owned state
 
-Design the language well, and the compiler writes itself. Design it poorly, and no amount of implementation effort can fix it. The ASDL is the architecture. Everything else is derived.
+If you compress those layers too early, terminal design gets muddy. If you keep them distinct, the architecture becomes much clearer.
 
-### 1.2 A program is a function from user intent to machine execution
+### 1.4 The second compiler compiles into proto language
 
-Every interactive program takes human gestures (clicks, keystrokes, drags, voice commands) and produces machine behavior (pixels on screen, samples to speakers, bytes to network, commands to hardware).
+Once a canonical machine exists, there is still another job to do:
 
-Between intent and execution, there is a GAP. The user thinks in domain concepts ("make this louder," "move this paragraph," "connect these nodes"). The machine operates on registers, memory addresses, shader programs, and audio buffers. The program's job is to bridge this gap.
+> how should this machine become an installable runtime artifact on this backend?
 
-Traditional programs bridge the gap at runtime, every frame, with dispatch tables, virtual calls, config lookups, and state machines. They are INTERPRETERS — they re-answer "what should I do?" every cycle.
+That job is realization.
 
-The compiler pattern bridges the gap at edit time, once, by COMPILING the user's intent into a specialized executable machine. On Terra that may be explicit native code. On LuaJIT it may be a highly specialized closure and state layout that the host JIT compiles aggressively. The compiled result runs until the intent changes. When it changes, the compiler runs again (incrementally — only the changed subtree).
+Every canonical machine still has to cross one more boundary:
 
-That wording matters. The terminal is not best understood as merely "returning a function." It is better understood as defining the machine the runtime should host. Backend packaging then gives that machine a calling convention, state layout, lifecycle, and installation story.
+> what is the smallest installable thing that hosts this machine on this backend?
 
-### 1.3 The gap has layers
+That boundary is realization, and its language is the **proto language**.
 
-The gap between intent and execution is never one step. There are always intermediate representations — levels of knowledge between "what the user said" and "what the machine does."
+Sometimes the proto language is thin:
+- Terra may lower to something close to a native proto with native code and native state layout
+- LuaJIT may lower to something close to a direct-closure proto for the smallest direct cases
 
+Sometimes the proto language is rich:
+- real Lua template functions that define execution shape
+- bytecode blobs produced from those templates via `string.dump`
+- explicit upvalue-binding plans installed via `debug.setupvalue`
+- source-kernel families loaded via `load` / `loadstring`
+- artifact identity and cache keys
+- hot-swapable named executable fragments
+
+So the compiler pattern often contains not one compiler but two linked compilers:
+
+1. **domain compilation** — from authored source to machine meaning
+2. **proto compilation / realization** — from machine meaning to installable runtime form
+
+This is not architectural drift. It is a normal lower-layer design choice.
+
+The proto language is not the source language of the domain. It is the structural language of installation. In simple cases it is almost empty; in richer cases it expands into explicit artifact families, binding schemas, and install catalogs.
+
+In `unit`'s current preferred project form, this split should be cheap and visible. The canonical minimal expression is often simply:
+
+```text
+myproj/
+  domain.lua
+  proto.lua
+  boundaries/
 ```
-User intent:      "I want a low-pass filter at 2kHz on this synth"
+
+`domain.lua` is the conventional home of domain-facing ASDL families. `proto.lua` is the conventional home of realization-facing ASDL families. This does **not** mean each file must contain only one module, and it does **not** mean every projection or internal phase deserves its own top-level file. It means the two most important language roles get an explicit, low-cost place in the project model.
+
+### 1.5 The gap has layers, and those layers are your phases
+
+The gap between “what the user said” and “what the runtime executes” is never one step. There are always intermediate levels of knowledge.
+
+```text
+User intent:      “I want a low-pass filter at 2kHz on this synth”
     ↓
 UI vocabulary:    Track → DeviceChain → Device(Biquad, freq=2000, q=0.7)
     ↓
@@ -69,364 +135,857 @@ Semantic model:   Graph → Node(biquad_kind, params=[2000, 0.7])
     ↓
 Execution plan:   Job(biquad, bus=3, coeffs=[b0, b1, b2, a1, a2])
     ↓
-Machine code:     Terra fn / LuaJIT-specialized loop: y = 0.067*x + 0.135*x1 + 0.067*x2 - ...
+Machine:          gen/filter-step, param/coeffs, state/history
+    ↓
+Proto language:   Terra native proto OR LuaJIT closure proto OR Lua template/blob/bind proto
+    ↓
+Installed unit:   Unit { fn, state_t }
 ```
 
-Each layer consumes knowledge — it resolves a decision that the layer above left open. The UI layer knows the user said "Biquad." The semantic layer resolves what that means in the graph. The execution plan computes the coefficients. The machine code bakes them as constants.
+Each layer consumes knowledge. Each phase boundary exists because some real decision is being resolved.
 
-### 1.4 These layers ARE your phases
+The question “how many phases should I have?” is answered by:
 
-Each layer is an ASDL module. Each transition between layers is a memoized function. The phases are not arbitrary — they reflect the actual structure of knowledge resolution in your domain.
+> how many distinct levels of knowledge resolution does this domain actually have?
 
-The question "how many phases should I have?" is answered by: "how many distinct levels of knowledge resolution does your domain have?" Not more. Not fewer. Each phase should consume at least one meaningful decision. If a phase doesn't resolve anything, it shouldn't exist. If a phase resolves two unrelated things, it should be two phases.
+Not more. Not fewer.
 
-### 1.5 The source phase is the most important
+### 1.6 The source phase is still the most important
 
-The source phase — the first phase, the one the user edits — determines everything. It is the input language of your compiler. Every other phase is derived from it. Every boundary transforms it. Every Unit compiles it.
+The source phase — the first phase, the one the user edits — determines everything.
 
-If the source phase is wrong — if it models the wrong concepts, or models them at the wrong granularity, or couples things that should be independent, or separates things that should be together — every downstream phase inherits the mistake. The entire pipeline compiles the wrong thing correctly.
+It is the input language of the compiler. Every later phase is derived from it. Every transition consumes knowledge from it. Every machine is downstream of it. Every installed artifact is downstream of that machine.
 
-Getting the source phase right requires understanding the domain deeply enough to answer: "what are the NOUNS of this domain?" Not the implementation nouns (buffers, callbacks, handlers). The DOMAIN nouns (tracks, clips, parameters, curves, connections, constraints). The things the USER thinks about. The things that appear in the UI. The things that get saved to disk and loaded back.
+If the source phase is wrong — wrong nouns, wrong granularity, wrong containment, wrong variants, wrong identity boundaries — every lower phase inherits the mistake. The entire pipeline compiles the wrong thing correctly.
 
-### 1.6 The hard part
+Getting the source phase right requires answering:
 
-The architectural primitives — ASDL `unique`, Event ASDL, Apply, memoized stage boundaries, pure structural transforms, and Unit — are tools. They don't tell you WHAT to compile. They don't tell you what your types should be. They don't tell you what phases to define. They don't tell you where knowledge is consumed. They don't tell you which sum types to create or when to eliminate them.
+> what are the domain nouns?
 
-That's the hard part. And it must be done RIGHT, upfront, before a single line of implementation. Because the ASDL IS the architecture. A wrong type in the source phase propagates through every phase, every boundary, every compiled output. You can't refactor a phase boundary after 50 functions depend on it. The cost of a wrong early decision compounds through the entire pipeline.
+Not implementation nouns:
+- buffer
+- callback
+- registry
+- renderer state
+- service container
 
-This document is about how to make those design decisions — and about the architecture that makes them pay off.
+But user nouns:
+- track
+- clip
+- parameter
+- rule
+- token
+- widget
+- cell
+- scene
+- proto if and only if proto is truly authored in that domain
+
+### 1.7 The hard part
+
+The framework primitives — ASDL, Event ASDL, Apply, memoized transitions, Machines, realization, Unit — are tools. They do not tell you what to model. They do not tell you what the source language should be. They do not tell you where knowledge is consumed, what lower forms are honest, or when realization deserves its own structural layer.
+
+That is the hard part.
+
+And it must be done correctly, because the ASDL is the architecture. A wrong type at the source phase propagates through transitions, machine design, realization strategy, installed artifacts, and runtime behavior. The cost compounds.
+
+This document is about making those design decisions explicitly and correctly.
 
 ---
 
-## Part 2: The Six Concepts and the Live Loop
+## Part 2: The Seven Concepts and the Live Loop
 
-The pattern is built from six concepts. They are small enough to state in a paragraph each and powerful enough to organize an entire interactive application.
+The pattern is built from seven concepts. They are small enough to state simply and strong enough to organize an entire interactive system.
 
 ### 2.1 Source ASDL
 
-This is what the program IS — the user-authored, user-visible, persistent model of the domain.
+This is what the program IS: the user-authored, user-visible, persistent model of the domain.
 
-In a music tool: tracks, clips, devices, routings, parameters. In a text editor: document, blocks, spans, cursors, selections. In a UI system: widgets, layout declarations, paint declarations, bindings. In a spreadsheet: sheets, cells, formulas, formatting rules, charts.
+In a music tool: tracks, clips, devices, routings, parameters.
+In a text editor: document, blocks, spans, cursors, selections.
+In a parser tool: grammar, token, rule, product.
+In a UI system: widgets, layout declarations, style declarations, bindings.
 
-The source ASDL is not runtime scaffolding. It is not a cache of derived facts. It is the authored program. It must answer: what did the user author? What should survive save/load? What should undo restore? What objects exist as user-visible things? What choices are independent user choices versus derived consequences?
+The source ASDL is not runtime scaffolding. It is not a cache of derived facts. It is not a bag of backend conveniences. It is the authored program.
 
-If the source tree cannot answer those questions cleanly, it is not yet the right source tree.
+It must answer:
+- what did the user author?
+- what survives save/load?
+- what does undo restore?
+- what exists as a user-visible thing?
+- which choices are independent authored choices rather than derived consequences?
 
 ### 2.2 Event ASDL
 
-This is what can HAPPEN to the program. Instead of treating interaction as arbitrary callbacks, the pattern models input as a language too.
+This is what can HAPPEN to the program.
 
-Examples: pointer moved, key pressed, node inserted, selection changed, parameter edited, transport started, file opened.
+Instead of treating interaction as arbitrary callbacks, the pattern models input as a language too. Examples:
+- pointer moved
+- key pressed
+- node inserted
+- selection changed
+- parameter edited
+- file opened
+- transport started
+- network message received
 
-Events are part of the architecture because they determine how the source program evolves. Modeling them explicitly as typed ASDL makes the input language inspectable, testable, and serializable — just like the source language.
+Events are architectural because they define how the source program evolves.
 
 ### 2.3 Apply
 
 The pure reducer:
 
-```
+```text
 Apply : (state, event) → state
 ```
 
-Apply does not reach into a global environment or mutate the world in place. It takes the current source ASDL plus an event and returns the next source ASDL.
+Apply does not mutate the world in place. It takes the current source program and an event and returns the next source program.
 
-That purity is not cosmetic. It is what makes:
-- undo simple (restore the previous tree)
-- structural sharing possible (unchanged subtrees are the same objects)
-- memoization coherent (same inputs → same outputs)
-- tests trivial (construct state, apply event, assert result)
-
-If Apply is correct, state evolution becomes explicit and inspectable.
+That purity is what makes:
+- undo simple
+- structural sharing possible
+- memoization coherent
+- tests trivial
+- the live loop understandable
 
 ### 2.4 Transitions
 
-A transition is a pure, memoized boundary from one phase to another:
+A transition is a pure, memoized boundary from one phase to another.
 
-- source → authored
-- authored → resolved
+Examples:
+- source → checked
+- checked → resolved
 - resolved → classified
 - classified → scheduled
+- lowered → machine-ir
 
-A transition consumes unresolved knowledge. That phrase matters. A real phase boundary should answer a real question: resolve IDs into validated structural facts, classify a variant into a smaller set of cases, attach derived semantic information, flatten a rich domain form into a leaf-oriented shape.
+A transition consumes unresolved knowledge. A real transition answers a real question:
+- what name does this reference resolve to?
+- which variant is this really?
+- which defaults apply?
+- what order exists?
+- what concrete lower shape should this subtree have?
 
-A transition is not just "another pass." It is a point where ambiguity is reduced.
+A transition is not just “another pass.” It is a reduction of ambiguity.
 
 ### 2.5 Terminals
 
-A terminal is a pure, memoized boundary that takes a phase-local node and ultimately produces an executable `Unit`.
+A terminal is the boundary where the compiler stops producing progressively lower ASDL and defines executable meaning.
 
-This is where the architecture stops being purely descriptive and becomes operational. The terminal says: this part of the program is now concrete enough — here is the specialized machine that performs it, here is the stable input it reads, here is the runtime state it owns.
+A terminal takes a phase-local node and produces either:
+- a canonical Machine
+- or a thin proto/install form when that is an honest one-step lowering
 
-The terminal should be understood as the bottom of a canonical stack:
+The terminal should be understood as the place where machine design becomes explicit:
+- what is `gen`?
+- what is `param`?
+- what is `state`?
+- what should be baked?
+- what should stay live?
+
+A terminal is still part of the compilation side. It decides the machine. It does not run it.
+
+### 2.6 Proto language
+
+The seventh concept has always been the **proto language**.
+
+Once a machine exists, there is still one more language to cross:
+
+> what is the installable realizable unit for this machine on this backend?
+
+That question is answered by the proto language.
+
+Realization is what the proto language is for. Realization is the lower compilation and installation movement:
 
 ```text
-transitions
-→ Machine IR
-→ canonical Machine
-→ backend lowering
-→ Unit runtime
+machine → proto → installed artifact
 ```
 
-At the terminal boundary specifically, that means:
+The proto language always exists, because every machine must become an installable thing on some host. What varies is whether the proto language is thin or rich.
 
-1. earlier transitions have already produced the right Machine IR
-2. the terminal defines the canonical machine: `gen` (the execution rule), `param` (stable machine input), `state` (mutable runtime-owned state)
-3. backend lowering then packages that machine as `Unit { fn, state_t }`
+Examples:
+- thin Terra native proto lowering
+- thin LuaJIT direct-closure proto lowering
+- Lua bytecode template → blob → bind proto lowering
+- source-kernel proto lowering via `load` / `loadstring`
+- install catalogs with explicit artifact identity and caching
 
-This is not a minor explanatory refinement. It is the right terminal philosophy. The compiler's semantic product is the machine. `Unit` is the backend/runtime packaging of that machine.
+The proto language is where backend policy becomes explicit without contaminating the source language.
 
-Depending on backend, this may mean a quoted Terra function + Terra struct type, a specialized Lua closure + FFI-backed state representation, or some other target-specific executable product.
+Its nouns may include:
+- named realizable unit
+- template
+- binding plan
+- artifact key
+- install mode
+- shape key
+- bytecode blob
+- source-kernel family
 
-### 2.6 Unit
+Those are not usually source-domain nouns. They are proto nouns.
 
-A `Unit` is the packaged runtime artifact for a compiled machine. Conceptually: executable behavior paired with owned runtime state layout.
+### 2.7 Unit
 
-```
+A `Unit` is the packaged runtime artifact for a machine after it has crossed the proto boundary.
+
+```text
 Unit { fn, state_t }
 ```
 
-The exact representation varies by backend, but the role is stable: the Unit packages a machine for installation, composition, hot swap, and execution on a particular backend. Units compose structurally — the same way the source tree composes structurally. Parent Units own child state. Composition is structural, not a separate architecture.
+`Unit` is about installation, composition, ownership, hot swap, and runtime calling convention.
 
-### 2.7 The live loop
+A Unit is not the whole semantic story. It is the installed package of the machine after proto lowering and installation.
 
-Put together, those six concepts yield the live loop:
+### 2.8 The live loop
 
-```
+Put together, those seven concepts yield the live loop:
+
+```text
 poll → apply → compile → execute
 ```
 
-**poll** — Read an input from the outside world: a UI event, an audio/control change, a file-system update, a timer tick, a network message.
+**poll** — read an input from the outside world
 
-**apply** — Use the pure reducer to turn the current source program into the next source program. If nothing meaningful changed, much of the structure stays identical. If something local changed, only that subtree gets a new identity.
+**apply** — use the pure reducer to derive the next source program
 
-**compile** — Re-run the memoized transitions and terminals. Because boundaries are pure and nodes preserve structural identity where possible, only the changed parts need to be recomputed. This is incremental compilation as a direct consequence of architecture, not a bolt-on subsystem.
+**compile** — re-run memoized transitions, terminals, and realization for affected subtrees only
 
-**execute** — Run the currently realized Units. That may mean: call the audio callback, draw the frame, answer hit tests, advance a simulation step. The execution layer should not be re-deciding architecture-level questions. It should be running the machine that the compiler has already specialized, with `Unit` serving only as the installed packaging of that machine.
+**execute** — run the currently installed artifacts
 
-### 2.8 Hot swap is the natural execution story
+This is incremental compilation as a direct consequence of architecture, not a bolt-on invalidation subsystem.
 
-The live loop makes hot swap a natural operation rather than a special subsystem. The story is:
+### 2.9 Hot swap is the natural execution story
 
-- the previous source program compiled to some installed Units
+The loop makes hot swap natural rather than exotic:
+- old source compiled to installed artifacts
 - a new event changes the source
-- affected subtrees recompile to new machines and freshly packaged Units
-- the runtime installs or swaps those Units
-- execution continues using the new machine
+- affected subtrees recompile
+- affected machines re-realize
+- affected Units re-install or swap
+- execution continues using the new installed artifacts
 
-There is no need to invent a separate conceptual layer called "live object behavior" that must somehow be synchronized with compilation output. The Unit IS the live-eligible compiled artifact.
+There is no need for a second shadow architecture called “live objects” that must somehow be reconciled with compilation output. The installed artifact is the live thing.
 
-### 2.9 The loop is continuous, not one-shot
+### 2.10 The loop is continuous, not one-shot
 
-This is not a traditional ahead-of-time compiler where the program is compiled once and then run forever. The program is alive. The user keeps editing it. So the system repeats: receive new event, derive new source program, recompile affected parts, keep running the new machine.
+This is not an ahead-of-time compiler that runs once and disappears. The program stays alive. The user keeps editing. The system keeps repeating:
+- receive event
+- derive next source
+- recompile affected parts
+- re-realize affected machines
+- keep running the result
 
-That is why the pattern is so suitable for interactive software. It treats interaction as editing a live program.
+That is why the pattern fits interactive software so well.
 
-### 2.10 Multiple compilation targets from one source
+### 2.11 Multiple compilation targets from one source
 
-The same source program may feed multiple derived products:
-
-- execution Units (audio, simulation)
-- view projections (pixels on screen)
-- inspection structures (debug views, scaffolding)
+The same source program may feed multiple memoized products:
+- execution artifacts
+- view projections
+- inspection structures
 - error reports
 - hit-test structures
+- realization catalogs
 
-These are all memoized pure products derived from the same source tree, possibly through different phase paths. The architecture already assumes this — it is not an extension.
+These are not special cases. They are ordinary outputs of the same compiler architecture.
 
-### 2.11 Why this is better than "just use immutable data"
+### 2.12 Why this is stronger than “just use immutable data”
 
-Many systems use immutable data and still remain interpreter-shaped. They still walk generic trees every frame, branch dynamically on variants in hot paths, separate code generation from state ownership awkwardly, bolt on caches after the fact, and treat runtime traversal as the real architecture.
+Many systems use immutable data and still remain interpreter-shaped. They still:
+- walk broad generic trees every frame
+- branch on wide variants in hot paths
+- bolt on caches later
+- mix code generation with runtime object graphs
+- hide backend policy in ad hoc runtime mechanisms
 
 The compiler pattern is stronger. Its real claim is:
 
-> the program should be explicitly modeled as source, and its execution should be the result of repeated specialization rather than repeated interpretation.
+> the program should be modeled as source, compiled into a machine, realized explicitly, and then run.
 
-That is a much bigger design statement than "use immutable data."
+That is much stronger than “use immutable data.”
 
 ---
 
-## Part 3: The Two Levels — Compilation and Execution
+## Part 3: The Three Levels — Compilation, Realization, and Execution
 
-The pattern stays coherent because it maintains a strong distinction between two kinds of code:
+The pattern stays coherent because it distinguishes three different kinds of work:
 
-1. Code that **decides what the machine should be** (compilation level)
-2. Code that **is the machine that runs** (execution level)
+1. work that decides what the machine should mean
+2. work that decides how that machine should be installed on a backend
+3. work that runs the installed result
 
-A lot of architecture becomes muddy because these two levels are mixed together. The application ends up half describing the program and half executing it at the same time, with no clear boundary between the two.
+A lot of architecture becomes muddy because these levels are collapsed together.
 
 ### 3.1 The compilation level
 
-The compilation level is where the system reasons about the user's program. It includes:
+The compilation level is where the system reasons about the authored program.
 
+It includes:
 - Source ASDL
 - Event ASDL
 - Apply
 - transitions
 - projections
-- terminals
 - structural error collection
-- inspection derived from the modeled program
-- the typed Machine IRs and terminal inputs that make machine construction obvious
+- Machine IR
+- terminal input design
+- canonical machine design
 
-Its characteristic properties are: pure, structural, memoized at stage boundaries, testable by constructor + assertion, driven by modeled data rather than ambient context.
+Its characteristic properties are:
+- pure
+- structural
+- memoized at stage boundaries
+- testable by constructor + assertion
+- driven by modeled data rather than ambient context
 
-This is the level where questions get answered: which variant is this really? Which IDs resolve to what? Which defaults apply? What layout should be produced? What machine should exist for this subtree? What specialized leaf machine should be emitted for it?
+This is where questions are answered:
+- which variant is this really?
+- what does this reference resolve to?
+- which defaults apply?
+- what lower shape is honest?
+- what machine should exist for this subtree?
 
-### 3.2 The execution level
+### 3.2 The proto / realization level
 
-The execution level is where the machine actually runs. It includes:
+The proto / realization level is where machine meaning becomes installable artifact form.
 
-- a Terra function executing on native state
-- a LuaJIT closure running over FFI-backed state
-- a callback invoked by SDL or an audio driver
-- a hit-test routine answering geometry queries
-- a draw routine traversing already-lowered batches
-- the runtime packaging and calling conventions that host installed machines as Units
+It includes things like:
+- backend realization policy
+- artifact planning
+- source vs closure vs bytecode choice
+- emitted-kernel assembly
+- install catalogs
+- artifact identity and cache keys
+- backend-specific packaging decisions
 
-Its characteristic properties are different: it may be imperative internally, it mutates only its owned runtime state, it should not be rediscovering high-level domain semantics, and it should be specialized enough that dynamic architectural reasoning has already been consumed.
+Its characteristic properties are different from both pure semantic compilation and hot execution:
+- still downstream of machine meaning
+- often structural and memoizable
+- explicitly backend-facing
+- concerned with installation and artifact identity
+- not the place where source-domain semantics should be rediscovered
 
-The execution level is not where the app decides what exists. It is where the compiled artifact does the work it has already been specialized to do. The machine is the semantic executable abstraction; the Unit is the backend/runtime container that hosts it.
+This is where the proto language lives.
 
-### 3.3 Why this split matters
+Sometimes the proto language is so thin that machine → proto → Unit feels almost compressed into one move. Sometimes it is rich enough to deserve explicit ASDL and helper machinery. In both cases, the architectural boundary is the same.
 
-If the execution level starts doing too much reasoning, you get symptoms: repeated dynamic branching on wide sum types, repeated lookups to resolve semantic facts that should have been attached earlier, runtime dependency on global context objects, mutable caches answering basic structural questions, difficulty testing without standing up large parts of the runtime.
+That is why the seventh concept should be named here as proto language rather than only as realization in the abstract. Realization is the process; proto language is the lower language it passes through.
 
-Those are all signs that compilation work leaked downward into execution.
+### 3.3 The execution level
 
-Likewise, if the compilation level starts taking on too much runtime machinery: pure boundaries become full of mutable orchestration state, terminals become hard to test without a live driver, backend concerns contaminate ASDL → Unit logic, phases stop reading like structural transformations and start reading like little runtimes.
+The execution level is where the installed artifact actually runs.
 
-### 3.4 The slogan
+It includes:
+- a Terra function over native state
+- a LuaJIT specialized closure over FFI-backed state
+- a loaded bytecode template with bound upvalues and installed state ownership
+- a draw routine
+- a parser callback
+- an audio callback
+- a simulation step
 
-> **The compilation level decides the machine. The execution level runs it.**
+Its characteristic properties are:
+- imperative internally if needed
+- mutates only owned runtime state
+- should not rediscover source semantics
+- should be narrow, monomorphic, and operational
+
+The execution level is not where the app decides what exists. It is where the installed artifact does the work it was specialized to do.
+
+### 3.4 Why this split matters
+
+If compilation work leaks downward into realization or execution, you get bad symptoms:
+- runtime branching on wide source variants
+- repeated name or ID lookup in hot paths
+- artifact assembly doing semantic work that should already be resolved
+- dependence on global context at the wrong level
+- difficulty testing without standing up large parts of the runtime
+
+If backend/install concerns leak upward into source modeling, you get different bad symptoms:
+- source ASDL polluted with artifact modes or runtime handles
+- domain types shaped by installer or bytecode concerns
+- user vocabulary replaced by backend vocabulary
+- save/load truth corrupted by implementation details
+
+The split exists to prevent those failures.
 
 ### 3.5 Compilation-level code
 
-The compilation level should be written in a recognizably structural style: `U.match`, `U.with`, `errs:each`, `errs:call`, ASDL constructors, small pure constructors, explicit error attachment. The goal is not to satisfy a functional-programming aesthetic. The goal is to ensure that phase boundaries behave like compiler passes: input structure in, output structure out, no hidden ambient dependence, no secret stateful side channels.
+Compilation-level code should read like pure structural compiler passes:
+- `U.match`
+- `U.with`
+- `errs:each`
+- `errs:call`
+- ASDL constructors
+- small pure helpers
+- explicit error attachment
 
-This is also the right place to understand the framework's functional helpers correctly. Operations like `U.each`, `U.fold`, `U.map`, `U.find`, `U.match`, `U.with`, and structural error collection are the **authoring vocabulary of the compilation level**. They are the surface language for writing pure compiler passes. They are NOT the deepest runtime ontology of the architecture.
+The goal is not aesthetic purity. The goal is to keep phase boundaries honest.
 
-That distinction matters. Functional structure is how you describe and transform typed programs. Machines are what eventually run. So the right slogan is:
+The framework's functional helpers belong here. They are the authoring surface of the pure layer. They are not the deepest runtime ontology.
 
-> **functional structure builds machines; machines become Units; Units run.**
+### 3.6 Realization-level code
 
-The functional API remains first-class, but in the right role: it is the language of the pure layer, not the final semantic model of execution.
+Realization-level code should read like backend-facing structural packaging, not like a second hidden semantic compiler and not like arbitrary runtime glue.
 
-### 3.6 Execution-level code
+Good realization-level concerns:
+- choose or derive a template family from already-lowered structure
+- attach binding payload in a defined order
+- choose artifact family
+- compute shape keys and artifact keys
+- install or restore installed artifacts
 
-Imperative code is not banned from the system. It is just supposed to live in the right place.
+Bad realization-level concerns:
+- deciding source-domain meaning
+- discovering references that should have been resolved earlier
+- interpreting a wide authored tree at install time
+- replacing honest lower ASDL with raw string concatenation too early
 
-At the execution level, the semantic center is no longer the functional helper vocabulary. It is the machine:
+### 3.7 Execution-level code
 
-- `gen` — what rule runs
-- `param` — what stable payload it reads
-- `state` — what mutable state it owns
+Imperative code is allowed at the execution level. It is expected there.
 
-And below that, the backend packages the machine as a `Unit` suitable for installation and runtime calling conventions.
+Good execution-level behavior:
+- update filter history in state
+- increment counters
+- traverse already-lowered arrays
+- issue GL/SDL/native calls
+- run a parser step over already-decided control structure
 
-Acceptable imperative behavior at the execution level: update filter delay elements in runtime state, increment frame counters, push pixels to a backend API, call SDL/GL/native APIs from installed code, mutate an allocated state struct during a callback.
+Bad execution-level behavior:
+- deciding which source variant something is
+- validating authored references every call
+- recomputing semantic facts every frame
+- rebuilding install-time structure while running
 
-What is not acceptable is smuggling architecture-level reasoning into that imperative code. The execution layer should not be where we repeatedly decide which domain variant something is, whether a reference is valid, which layout policy applies, or how a wide authored form should be interpreted this frame. Those questions belong upstream.
+### 3.8 Terminals end compilation; realization begins
 
-### 3.7 Illustration: healthy vs unhealthy split
+Terminals still belong to the compilation side, even when they immediately produce an installed artifact.
 
-**Healthy text rendering:**
-- Compilation: resolve font, attach style defaults, shape text, compute line breaks, derive glyph runs, produce draw-ready items, terminal emits a specialized Unit
-- Execution: iterate already-shaped runs, read glyph positions, issue drawing operations
+The important conceptual order is:
 
-**Unhealthy text rendering:**
-- Execution: choose a font, discover wrap mode, resolve alignment, shape text on the fly, compute line layout every frame for the same unchanged subtree
+```text
+compilation decides the machine
+realization installs the machine
+execution runs the installed result
+```
 
-**Healthy audio filter:**
-- Compilation: read authored filter type and parameters, resolve channel topology, compute coefficients, emit a leaf fixed to the concrete filter kind, define `state_t` that owns only live integrator history
-- Execution: read sample input, update state history, run the fixed arithmetic path
-
-**Unhealthy audio filter:**
-- Execution: what kind of filter is this? How many channels? Where are my coefficients? Which code path for this variant?
-
-### 3.8 Terminals are on the compilation side
-
-Even though terminals produce executable artifacts, terminals themselves are still part of the compilation level. A terminal is a pure function from phase-local data to a machine, and then to a packaged Unit. The terminal should remain structural and testable. Backend API details should be encapsulated in the produced Unit, not leaked into the terminal's semantic input model.
+Some APIs may compress those steps. The architecture should not.
 
 ### 3.9 Error handling differs by level
 
-At the compilation level, errors are structural: missing reference, unknown asset, invalid authored combination. They can be attached to the relevant subtree, collected, and sometimes replaced with neutral fallback behavior so unaffected siblings still compile.
+At the compilation level, errors are structural:
+- invalid authored combination
+- missing reference
+- unknown asset
+- impossible lower form
 
-At the execution level, errors are operational: runtime backend failure, device failure, driver unavailability, hard execution faults.
+At the proto / realization level, errors are install-oriented:
+- backend does not support this realization mode yet
+- bytecode artifact failed to load
+- artifact restore failed
+- binding installation failed
 
-Mixing these two kinds of error handling leads to poor design.
+At the execution level, errors are operational:
+- driver failure
+- device failure
+- hard runtime fault
+
+Mixing these error families leads to bad design.
 
 ### 3.10 Testing differs by level
 
-Compilation-level tests should look like: construct ASDL input, call reducer/transition/terminal, assert output. No mocks, no containers, no elaborate runtime setup.
+Compilation-level tests should look like:
+- construct ASDL input
+- call reducer / transition / terminal
+- assert output
 
-Execution-level tests may involve: smoke tests, benchmark harnesses, backend integration checks, profiling and latency measurements.
+Realization-level tests should look like:
+- construct lowered or machine input
+- realize it
+- assert artifact identity, source, install mode, or callable result
 
-Both matter, but they test different things.
+Execution-level tests may involve:
+- smoke tests
+- benchmarks
+- backend integration checks
+- profiling and latency measurement
+
+All three matter, but they are not the same kind of test.
 
 ### 3.11 Backend neutrality depends on this split
 
-The compilation level is where most of the application's meaning lives: modeled source, event handling, transitions, projections, terminal design. If that layer stays pure and structural, then different backends can realize the resulting Units differently without forcing a redesign. If instead the compilation layer is full of backend-specific runtime assumptions, the architecture stops being portable.
+Most of the application's meaning should live above realization:
+- source language
+- event language
+- apply
+- phase design
+- Machine IR
+- terminal intent
+
+Most backend variation should live at realization and below:
+- exact code shape
+- artifact family
+- installation path
+- state representation
+- calling convention
+
+That is what keeps the architecture portable.
 
 ---
 
-## Part 4: Unit — The Packaged Runtime Artifact
+## Part 4: Machine, Proto Language, and Unit
 
-### 4.1 What a Unit is
+### 4.1 What the lower stack is
 
-A `Unit` is the packaged runtime artifact for a compiled machine for a subtree of the source program. It pairs specialized behavior with the runtime state layout that behavior owns.
+The lower stack of the pattern is not just “terminal returns Unit.” It is:
 
+```text
+Machine IR
+→ canonical Machine (`gen`, `param`, `state`)
+→ proto language
+→ Unit / installed artifact
 ```
-Unit { fn, state_t }
+
+That is the correct explanatory order.
+
+- **Machine IR** makes lower execution structure explicit
+- **Machine** is the semantic executable abstraction
+- **proto language** is the language of installable realizable units for that machine on this backend
+- **Unit** is the packaged installed runtime artifact
+
+### 4.2 Why Machine is better than “just a function”
+
+A plain function hides too much.
+
+It does not tell you clearly:
+- what should be baked into code shape
+- what stable payload should remain available as param
+- what mutable state must persist across calls
+- what lower typed feeder layer should exist above it
+
+`gen, param, state` makes those roles explicit.
+
+That helps with:
+- leaf-first design
+- bake/live splits
+- terminal input design
+- backend comparison
+- deciding what realization policy is actually appropriate
+
+### 4.3 Why proto is not a backend footnote
+
+Proto is not merely “the last bit of backend work.”
+
+The proto language may be thin. It may be rich. But it is always there, and when it becomes non-trivial it deserves explicit design.
+
+A good proto layer may need to represent:
+- artifact family
+- template family
+- binding schema
+- bytecode blob
+- installation metadata
+- shape identity
+- artifact identity
+- upvalue slot order
+- hot-swap and cache behavior
+
+Those are real architectural concerns. They should not be hand-waved away as incidental implementation detail when they materially shape the backend/install story.
+
+See also §6.10 on proto footguns: proto richness invented too early, proto genericity kept too long, hidden binding contracts, and proto doing semantic work are all signs that the lower design is still wrong.
+
+### 4.3.1 Realization as host contract
+
+A canonical machine is not yet a running system.
+
+That sentence is the key to the whole proto / realization layer.
+
+By the time semantic compilation finishes, the compiler may already know exactly what should execute:
+- what `gen` is
+- what stable payload belongs in `param`
+- what mutable payload belongs in `state`
+- what loops, dispatch records, refs, slots, and resources the machine needs
+
+But the machine is still not yet **hosted**.
+
+It does not yet know:
+- who installs it
+- who calls it
+- what timing model governs it
+- what state ownership means in this host
+- how hot swap works here
+- what resource lifecycle rules apply
+- what error boundary surrounds it
+- what artifact forms this host accepts
+
+That missing step is realization.
+
+This is why realization should not be thought of merely as “emit some code” or “choose Lua vs Terra.” The deeper truth is:
+
+> realization binds machine meaning to a host contract.
+
+It also helps to separate three lower-level questions that are often confused:
+
+1. **host/backend world** — LuaJIT, Terra, or some other host world
+2. **proto family** — text proto, closure proto, quoted/native proto, generated proto, etc.
+3. **artifact/install mode** — `load` / `loadstring`, direct closure, bytecode blob, native function, generated module, and so on
+
+These are related, but they are not the same axis.
+
+- **Lua vs Terra** is primarily a host distinction
+- **text vs closure vs quote/native proto** is a proto-language distinction
+- **`loadstring` vs closure vs bytecode vs native function** is an install-mode distinction
+
+Keeping those axes separate prevents several design failures:
+
+- leaking install policy into the domain language
+- forcing different backends into one fake lowest-common-denominator proto
+- hiding real host-contract differences behind the vague word “backend”
+- making install code rediscover semantics that should already have been lowered
+
+So when the lower architecture is clean, `proto` is one first-class realization side, but it may still contain several backend-shaped proto families inside it. A single `proto.lua` does not imply one generic universal proto language.
+
+A host contract is the structured account of what a runtime world expects and provides. It may include:
+- installation API
+- uninstallation API
+- swap policy
+- callback or frame shape
+- state ownership model
+- timing model
+- resource lifetime rules
+- permitted artifact forms
+- serialization or transport rules
+- operational error boundary
+
+In that sense, a backend is often not merely a target language. It is a **host world**.
+
+A useful canonical pattern is:
+
+```text
+installed_artifact = realize(host_contract, machine)
 ```
 
-- `fn` describes realized behavior — the executable code under this backend's calling convention
-- `state_t` describes owned runtime state — the layout the code operates on
+That is the simple form of realization.
 
-The compilation level decides the machine that should exist. Backend realization packages that machine as a Unit. The execution level operates on the packaged result.
+The machine says what should execute. The host contract says under what runtime terms that machine becomes alive. The installed artifact is the result.
 
-### 4.2 Why Unit is better than "just a function"
+This matters especially in multi-output systems, where one source program may compile into several different machines that must live under different host contracts.
 
-A plain function does not necessarily tell you what runtime state it owns, how that state should be allocated, how child state composes into parent state, what the lifecycle of that state is, or how hot swap should treat state compatibility.
+For example, in a DAW-like system, one source program may yield:
 
-The Unit concept is richer because it keeps the runtime packaging, state ABI, and executable behavior coupled. That is especially important in a system built around repeated recompilation. If the compiled artifact changes, the state ownership model may change too, and the architecture should represent that explicitly. But it is equally important to remember that Unit is still not the first machine concept. The semantic machine exists one layer above: `gen`, `param`, `state`.
+- an **audio machine**
+- a **view machine**
+- a **network machine**
+- perhaps a **control / MIDI machine**
 
-### 4.3 Why Unit is better than codegen plus external runtime objects
+These are all valid semantic products of the same source. But they are not hosted under the same contract.
 
-Another common alternative is to generate code but keep runtime state in a separate object system. That usually leads to either: the codegen is not really in charge of the running machine, or the runtime object layer becomes a shadow architecture competing with the source ASDL.
+An **audio host contract** may define:
+- callback shape
+- sample/block timing model
+- real-time safety rules
+- buffer ownership
+- swap policy
+- audio-device error boundary
 
-The Unit avoids that split. The compiled machine owns its runtime state contract. Composition owns child state structurally. The runtime object graph does not need to be the real architecture.
+A **view host contract** may define:
+- frame/tick boundary
+- input event boundary
+- surface lifecycle
+- redraw policy
+- GPU resource ownership
+- render-loop swap policy
 
-### 4.4 What belongs inside state_t
+A **network host contract** may define:
+- send/receive boundaries
+- connection ownership
+- serialization rules
+- retry / reconnection policy
+- transport-level error handling
 
-Good examples:
-- integrator history for filters
-- mutable counters owned by the machine
-- parent-owned child state aggregation
-- cached runtime handles that are truly execution ownership
-- temporary execution-time fields that persist only as long as the machine does
+So a more complete picture is:
 
-Poor examples:
-- authored parameter choices (belong in source)
-- unresolved references (belong in source, resolved in a phase)
-- derived semantic facts that should have been attached structurally before terminalization
+```text
+source
+→ semantic phases
+→ canonical machine(s)
+→ realize(audio_contract,   audio_machine)
+→ realize(view_contract,    view_machine)
+→ realize(network_contract, network_machine)
+→ installed artifacts
+```
 
-### 4.5 Unit composition
+That is why whole “backends” can become parameters. More precisely, whole **host contracts** can become parameters of realization.
 
-Because Units compose structurally, they give the architecture a natural locality story:
+This is stronger than ordinary backend abstraction. It is also stronger than dependency injection.
 
-- child A has `state_t_A`
-- child B has `state_t_B`
-- parent `compose` builds a parent `state_t` containing those as fields plus any parent-local state
+Dependency injection usually means passing services into arbitrary runtime code. Realization is cleaner than that. The host contract is not ambient context for arbitrary behavior. It is the explicit parameter to a controlled lower transformation:
 
-The result is a single structural layout reflecting the same containment story as the source tree. The source tree composes structurally. The compiled Units compose structurally. The runtime state layout also composes structurally. All three relationships line up.
+```text
+machine × host_contract → installed_artifact
+```
 
-This is cleaner than scattered heap objects, external registries, dynamic table lookup by child index, or generic runtime containers holding opaque state blobs.
+That discipline prevents a common architectural collapse.
 
-If a source subtree is unchanged, its terminal hits the memoize cache, its Unit can be reused, and the parent composition may also be reused depending on identity structure. Runtime installation can often remain stable.
+Without it, source-domain meaning leaks downward and host details leak upward:
+- source ASDL grows fields that only matter because something will later be installed
+- terminals quietly absorb installer logic
+- realization code rediscovers semantic distinctions that should have been consumed earlier
+- runtime integration accumulates ad hoc caches and hidden glue
+
+With an explicit host-contract view of realization, the layers stay honest:
+- the **source language** says what the user means
+- the **machine** says what should execute
+- the **proto layer** says where and under what contract that machine lives
+
+This also clarifies what makes the proto language thin versus rich.
+
+Sometimes the proto is thin:
+- a small machine becomes a specialized Lua closure proto
+- a Terra machine becomes a thin native install proto
+
+Sometimes the proto language develops real nouns of its own:
+- artifact family
+- template family
+- install mode
+- shape key
+- artifact key
+- binding plan
+- bytecode blob
+- install catalog
+- bundle or package
+
+When those nouns are real, realization deserves explicit structure. That is not architectural drift. It is architectural honesty.
+
+This is also the right place to understand proto-like vocabularies. `Proto`, `catalog`, `binding plan`, `install mode`, `artifact key` — these are usually not source-domain nouns. They are proto nouns. They become correct when the question is no longer “what does the user mean?” but rather:
+
+> what is the installable realizable unit of this machine family under this host contract?
+
+That is the deeper rule:
+
+> a machine is semantically complete before realization, but it is not operationally alive until realization binds it to a host.
+
+So realization exists because semantic correctness is not yet hosted existence.
+
+That is why the layer matters. That is why audio, view, network, export, and control can each have different realization contracts. And that is why the right parameter of realization is often not merely a target compiler, but a whole host contract.
+
+### 4.3.2 Three canonical Lua realization patterns: direct closure, template → blob → bind, and source kernel
+
+Lua has three especially useful realization patterns, and all three should be treated as legitimate.
+
+The first is **direct closure realization**:
+
+```text
+machine
+→ specialized closure
+→ installed function / Unit
+```
+
+This is often the best answer when installation is simple and closure capture already expresses the machine honestly. Direct closures are not a fallback. They are the best direct Lua realization form.
+
+The second is the default **explicit structural** realization pattern:
+
+```text
+template function
+→ string.dump(template_fn)
+→ bytecode blob
+→ load(blob)
+→ debug.setupvalue(binding plan)
+→ installed function / Unit
+```
+
+This pattern is unusually clean because it keeps each lower role explicit.
+
+- The **template** is real Lua. You can read it, test it, profile it, and reason about it as ordinary code.
+- The **bytecode blob** is the artifact form. It captures execution shape without pretending to be source truth.
+- The **binding plan** is the realization form of machine `param`. The semantic compiler decides what values must be injected; realization decides where those values are bound.
+- The **installed function** is the loaded and bound result. No source concatenation is required at install time, and no parser step is paid on the hot installation path.
+
+In this design, `string.dump` captures shape, while `debug.setupvalue` injects compiled meaning. That is a very good fit for the canonical Machine split:
+
+- `gen` chooses the execution family
+- `param` becomes the stable binding payload
+- `state` remains runtime-owned mutable data
+
+The third is **source-kernel realization**:
+
+```text
+kernel source
+→ load / loadstring
+→ installed function / Unit
+```
+
+This is the right choice when the source kernel itself is the honest artifact: for example, when a human or a lower compiler intentionally shapes LuaJIT traces, performs unrolling, or authors exact low-level execution structure for a known machine family. In this mode, source is not a fallback for unfinished lowering; source is the realization artifact.
+
+So the practical rule is:
+
+- use **direct closures** when direct realization is honest
+- use **template → blob → bind** when realization needs explicit artifact structure
+- use **source kernels via `load` / `loadstring`** when exact LuaJIT code shape is itself the point
+
+Terra still makes sense when explicit native ABI, native layout, or LLVM-level optimization is required. The real distinction is not “closures versus bytecode.” It is **direct realization versus explicit realization**.
+
+It is also the right place to be strict.
+
+- No ad hoc `loadstring` as the default installation path.
+- No source concatenation that rediscovers semantics which should already have been lowered.
+- No relying on informal upvalue ordering in bytecode-binding paths.
+
+If bytecode installation depends on upvalues, the proto layer should model the binding schema explicitly: slot index, expected meaning, and compiled payload source. The template family should identify a class of machines that share one execution shape under one host contract; differing compiled payload should change binding values, not force a brand-new semantic architecture.
+
+If source-kernel realization is used, the generated or handwritten source should likewise correspond to a known realization family rather than serving as a generic escape hatch for unresolved semantics.
+
+In practical terms, a template family or source-kernel family corresponds roughly to a **terminal realization family**: one host-side execution skeleton for a machine shape, an artifact mode, and a host contract. That is why explicit Lua realization is not just serialization. It is a host-contract design.
+
+### 4.4 What belongs in param, state, and artifact
+
+A useful discipline is:
+
+**belongs in `param`:**
+- stable machine input
+- resolved refs
+- coefficients
+- slot indices
+- already-decided control structure
+- machine-local static payload
+
+**belongs in `state`:**
+- mutable runtime-owned data
+- counters
+- histories
+- accumulators
+- persistent execution-time state
+
+**belongs in realization artifact form:**
+- template identity or shape key
+- binding schema / binding payload
+- bytecode blob
+- artifact key
+- install metadata
+- backend-specific packaging details
+
+**does not belong in any of these lower layers:**
+- user-authored choices that should stay in source ASDL
+- unresolved references
+- wide source-domain sums that should have been consumed earlier
+
+### 4.5 Structural installation and composition
+
+Units compose structurally, and realization artifacts often should too.
+
+If child A and child B are separate compiled or realized child machines, parent composition should reflect that structure rather than rebuilding a shadow runtime architecture around them.
+
+That gives the system a natural locality story:
+- source tree composes structurally
+- lower machine-feeding forms compose structurally
+- realization artifacts may compose structurally
+- Units compose structurally
+- runtime state layout composes structurally
+
+All of those layers line up when the model is honest.
 
 ### 4.6 The canonical machine: gen, param, state
 
-The `Unit { fn, state_t }` is the packaged runtime artifact, but it is not the first machine concept. The canonical machine layer immediately above that packaging is:
+The canonical machine layer immediately above runtime packaging is:
 
 - **gen** — the execution rule / code-shaping part
 - **param** — the stable machine input it reads
@@ -437,44 +996,42 @@ So the bottom of the architecture is best understood as a canonical chain, not a
 1. **transitions** — pure boundaries that consume knowledge and produce the right lower typed forms
 2. **Machine IR** — the typed machine-feeding layer that makes order, access, use-sites, resource identity, and runtime ownership explicit
 3. **canonical Machine** — `gen`, `param`, `state`
-4. **backend lowering** — target-specific realization of that machine
-5. **Unit runtime** — installed runtime packaging as `Unit { fn, state_t }`
+4. **proto language** — target-specific installable form of that machine
+5. **Unit / installed artifact** — installed runtime packaging as `Unit { fn, state_t }`
 
-This is not an optional explanatory trick. It is the right way to think about terminal design. The compiler's semantic product is the machine. The Unit is how that machine is installed, composed, swapped, and run on a particular backend.
+On LuaJIT specifically, the proto language may produce:
+- a direct closure for tiny or cold paths
+- a specialized closure for the smallest common hot paths
+- a bytecode template artifact installed by `load(blob)` plus explicit `debug.setupvalue` binding
+- an install-oriented artifact catalog when that is the honest backend surface
 
-This also clarifies the role of the framework's older functional surface. The functional helper vocabulary is still essential, but its job is to BUILD and FEED machines, not to replace them as the semantic center. In other words:
+These are realization policies for the same machine, not new semantic layers.
 
-- **functional API** — the authoring surface for pure transitions, projections, reducers, and terminal construction
-- **Machine** — the canonical execution model
-- **Unit** — backend-specific installed realization of that machine
-
-Many terminal design mistakes come from compressing those three questions too early. A leaf may look awkward not because Unit is the wrong contract, but because the phase above it is not making gen, param, and state obvious enough.
+This is not an optional explanatory trick. It is the right way to think about terminal design. The compiler's semantic product is the machine. The installed runtime artifact is how that machine is hosted on a backend.
 
 ### 4.7 Machine IR
 
-A good Machine IR above the canonical machine is the **typed machine-feeding layer** that makes the machine's compiled wiring explicit. The machine is the real semantic executable abstraction; Machine IR exists to make that machine trivial to derive; Unit then packages it for runtime. Machine IR should answer five things directly:
+A good Machine IR above the canonical machine is the **typed machine-feeding layer** that makes the machine's compiled wiring explicit. The machine is the real semantic executable abstraction; Machine IR exists to make that machine trivial to derive; realization and Unit then package it for installation and runtime.
+
+Machine IR should answer five things directly:
 
 1. **Order** — what loops exist? What spans or ranges are executed? What headers determine one execution slice?
-
 2. **Addressability** — how does execution reach what it needs? What refs, slots, indices, or handles are already resolved?
-
 3. **Use-sites** — what concrete occurrences are executed? What instances of drawing, querying, routing, or processing exist?
-
 4. **Resource identity** — what realizable resources may need runtime ownership? What stable resource specifications identify them?
-
 5. **Runtime ownership requirements** — what mutable runtime state must persist? What state schema does the machine require?
 
-That is a more useful way to think about Machine IR than calling it merely a planning layer. Its job is to make gen, param, and state trivial to derive.
+That is a more useful way to think about Machine IR than calling it merely a planning layer. Its job is to make `gen`, `param`, and `state` obvious.
 
-This does NOT mean introducing a generic interpreted wiring DSL. The pattern should not devolve into runtime nodes like `Accessor(kind, ...)` or `Processor(kind, ...)` that execution must interpret dynamically. That would recreate the accidental interpreter at a different layer.
+This does **not** mean introducing a generic interpreted wiring DSL. The pattern should not devolve into runtime nodes like `Accessor(kind, ...)` or `Processor(kind, ...)` that execution must interpret dynamically. That would just recreate the accidental interpreter lower down.
 
-Instead, the wiring should already have been compiled into ordinary typed shapes the machine can consume directly: spans and ranges, headers and closed dispatch records, slot/index refs, instance records, resource specifications, runtime state schemas.
+Instead, the wiring should already have been compiled into typed shapes the machine can consume directly: spans and ranges, headers and closed dispatch records, slot refs, instance records, resource specifications, runtime state schemas.
 
 The practical test is:
 
 > does the machine receive explicit order, addressability, use-sites, resource identity, and persistent state needs — or does it still have to invent them while running?
 
-If it still has to invent them, the ASDL and phase structure above the terminal are still too high-level.
+If it still has to invent them, the phase structure above it is still too high-level.
 
 ### 4.8 The header pattern
 
@@ -482,64 +1039,732 @@ When several later branches must remain aligned after a shared flattening phase,
 
 A better design is often:
 
-1. Define a **shared structural header vocabulary**
-2. Let later branches carry only their own orthogonal fact planes
-3. Rejoin those branches structurally through the shared header/index space rather than through semantic lookup
+1. define a **shared structural header vocabulary**
+2. let later branches carry only their own orthogonal fact planes
+3. rejoin those branches structurally through the shared header/index space rather than through semantic lookup
 
 A header is not just metadata. It is a typed structural carrier for truths such as: stable identity, parent/child topology, subtree spans, region-local index space — whatever minimal structural alignment later branches must share.
 
-The key discipline is:
+The discipline is:
 
 > keep shared structure in the header spine; keep branch-specific meaning in separate fact planes.
 
-Without a header spine, there is constant pressure to build oversized lower nodes that carry geometry facts, render facts, query facts, accessibility facts, and routing facts all together, merely so later phases can still line them up. That creates broad rebuilds, hidden coupling between branches, and expensive late splitting.
-
-The practical test is:
-
-> if several later branches need the same structural identity/topology but different semantic facts, should there be one shared header spine instead of one wider node type?
-
-Very often, yes.
+Without a header spine, there is constant pressure to build oversized lower nodes that carry unrelated concerns together merely so later phases can still line them up.
 
 ### 4.9 The facet pattern
 
-If the header spine carries the shared structural truth, then the next question is: what different aspects of meaning are attached to that shared structure, and which later consumers actually need which aspects?
+If the header spine carries the shared structural truth, the next question is: what different aspects of meaning are attached to that shared structure, and which later consumers actually need which aspects?
 
-A **facet** is one orthogonal semantic plane aligned to the shared header/index space. Typical examples: layout facts, paint facts, content facts, behavior facts, accessibility facts.
+A **facet** is one orthogonal semantic plane aligned to the shared header/index space.
+
+Typical examples:
+- layout facts
+- paint facts
+- content facts
+- behavior facts
+- accessibility facts
+- routing facts
+- realization facts when several install-oriented branches share one structural spine
 
 Instead of widening one lower node record until it carries everything, a better design is:
 
-1. One shared header spine
-2. Several aligned facet planes
-3. Branch-specific lowerings that consume only the facets they actually need
+1. one shared header spine
+2. several aligned facet planes
+3. branch-specific lowerings that consume only the facets they actually need
 
-In that shape: the header answers "what thing is this in the shared structure?" and the facet answers "what aspect of that thing are we talking about?"
+Together, headers and facets give a powerful lower design shape:
 
-This matters because many bad lower designs come from bundling concerns that do not need to travel together. Geometry solve does not usually need paint facts. Render lowering does not usually need key-route facts. Accessibility often does not need to travel with render semantics at all.
+> **spine + facets**
 
-The facet pattern is both a modeling improvement and a performance improvement. With the right facet split: each lowering phase does less semantic work, unrelated edits stay more local, memoization boundaries stay cleaner, and joins remain structural through the shared header/index space.
+The spine carries shared structural truth. The facets carry orthogonal semantic truth.
 
-Together, headers and facets give a powerful way to design lower ASDL that stays local, branchable, and machine-friendly:
+### 4.10 Errors and fallback at the realization / Unit boundary
 
-- **headers** carry shared structural truth
-- **facets** carry orthogonal semantic truth
+Suppose a subtree cannot be compiled or realized cleanly because:
+- an asset is missing
+- a reference is invalid
+- a backend does not support a requested realization form yet
+- an emitted artifact fails to install
 
-### 4.10 Errors and fallback at the Unit boundary
-
-Suppose a subtree cannot be compiled cleanly because an asset is missing, a reference is invalid, or a backend does not support some requested form yet. A good architecture can:
-
+A good architecture can:
 - attach an error to that subtree
-- produce a neutral fallback Unit if appropriate
+- produce a neutral fallback artifact or Unit if appropriate
 - continue compiling unaffected siblings
 
-A missing image may compile to a placeholder visual Unit. An unsupported effect may compile to a no-op Unit plus an attached error. An invalid reference may compile to silence in an audio subtree. This is much cleaner than turning one subtree problem into a global runtime failure.
+A missing image may compile to a placeholder visual Unit. An unsupported effect may compile to a no-op Unit plus an attached error. A realization mode not yet supported may fall back from bytecode to source or closure when that is architecturally honest. This is much cleaner than turning one subtree problem into a global runtime failure.
 
 ---
 
 ## Part 5: Designing the ASDL
 
+Before the step-by-step method, it helps to make the architectural vocabulary explicit.
+
+There are really **three different distinctions** in play:
+
+1. the minimal set of **formal type constructors**
+2. the minimal set of **architectural roles**
+3. the difference between **domain modeling** and **realization modeling**
+
+Confusing these levels creates a lot of design fog.
+
+- The **formal** level tells you what shapes the type algebra has.
+- The **architectural** level tells you how those shapes are used in a compiler-pattern design.
+- The **domain vs realization** distinction tells you which language you are designing at a given moment.
+
+This last distinction is now essential.
+
+A compiler-pattern system always contains both:
+
+1. a **domain source language**
+2. a **proto language** for installable artifacts
+
+Those are not the same thing.
+
+The first is the language of meaning. The second is the language of installation.
+
+A parser frontend may have source nouns like:
+- grammar
+- token
+- rule
+- product
+
+and proto nouns like:
+- proto
+- template family
+- binding schema
+- artifact key
+- install mode
+- bytecode blob
+
+The first language describes what the user means in the domain.
+The second language describes how already-lowered machine meaning becomes installable on a backend.
+
+The crucial refinement is that the proto language is always present architecturally, even when it is thin, degenerate, or almost identity-shaped. The design question is not whether the second language exists. The design question is whether it is thin or rich.
+
+This is why the seventh concept has always really been proto language. “Realization” names the lower compilation/install movement through that language; proto language names the language itself.
+
+If you confuse them, you get one of two bad outcomes:
+- realization concerns leak upward and pollute the source ASDL
+- source-domain meaning gets rediscovered too late inside the backend/install layer
+
+So Part 5 now has two jobs:
+
+1. explain how to model the **domain source ASDL** correctly
+2. explain how to model the **proto ASDL** honestly, whether it is thin or rich
+
+#### How the two languages think differently
+
+This distinction is not only about vocabulary. It is about mindset.
+
+In the **domain ASDL**, we think in **meaning**.
+
+The questions are:
+- what does the user work with?
+- what does the user see and edit?
+- what must save/load preserve?
+- what must undo restore?
+- what has stable domain identity?
+- what are the real domain variants?
+- what owns what in the user's world?
+
+So domain ASDL thinks in nouns such as:
+- entity
+- property
+- variant
+- containment
+- reference
+- authored choice
+- persistent truth
+
+In the **proto ASDL**, we think in **hosting**.
+
+The questions are:
+- what is the smallest installable thing?
+- what proto family does this machine belong to?
+- what host contract installs it?
+- what binding surface does it expose?
+- what artifact identity matters?
+- what gets cached, restored, swapped, or loaded?
+- what install structure is real here?
+
+So proto ASDL thinks in nouns such as:
+- proto
+- template family
+- source-kernel family
+- binding plan
+- artifact family
+- install mode
+- shape key
+- artifact key
+- install catalog
+
+The difference is fundamental:
+
+> domain ASDL is modeled from the user's ontology;
+> proto ASDL is modeled from the host's ontology.
+
+Or more briefly:
+
+> in the domain ASDL, we think in meaning;
+> in the proto ASDL, we think in hosting.
+
+If you think proto thoughts while modeling the domain ASDL, source truth gets polluted by install concerns. If you think domain thoughts while modeling the proto ASDL, installation stays vague and generic when it should have specialized structure.
+
+So one of the core design skills in this pattern is learning to switch mental mode deliberately:
+- **domain mode** for source truth
+- **proto mode** for installation truth
+
+### 5.0 The minimal architectural vocabulary
+
+#### 5.0.1 The formal minimum
+
+At the deepest level, most useful ASDL is built from a very small algebra:
+
+- **product** — a record with fields
+- **sum** — a tagged choice / enum / variant
+- **sequence** — zero or more children
+- **reference** — a stable cross-link by ID
+- **identity** — stable naming of independently editable things
+
+This is the mathematical minimum.
+
+But this level is too low-level to guide architecture by itself. It does not tell you:
+
+- what deserves stable identity
+- which choices belong in the source ASDL
+- when a lower phase should become a projection
+- when several downstream branches need one shared alignment space
+- when one wide lower node should split into orthogonal semantic planes
+
+For that, we need a second vocabulary.
+
+A note on **reference** specifically: reference belongs in the formal minimum, but it should be treated with caution in architectural design.
+
+A reference is not automatically wrong, but it is never free. It introduces non-local dependency, validation burden, phase-ordering pressure, possible cycles, and lookup needs. Containment is the calm default. Reference is a controlled escape from the tree.
+
+So the right stance is:
+
+- containment first
+- references only for real authored cross-links
+- references represented as stable IDs, never live object pointers
+- references resolved in explicit phases as early as possible
+
+A useful practical slogan is:
+
+> a reference is not necessarily a smell, but it is always a coupling signal.
+
+If references proliferate, ask whether the design is missing containment, normalization, a projection, a spine, or a dedicated resolve phase.
+
+#### 5.0.2 The architectural minimum
+
+A more useful working vocabulary for this repository is:
+
+- **entity**
+- **variant**
+- **projection**
+- **spine**
+- **facet**
+
+These are not new formal type constructors. They are recurring architectural roles built from products, sums, sequences, references, and stable identity.
+
+This is close to the minimal practical vocabulary for designing ASDL well. Once this vocabulary is clear, design becomes much more compositional: instead of inventing large custom shapes from scratch, you compose a small number of known roles correctly.
+
+#### 5.0.3 Entity
+
+An **entity** is a persistent user-visible thing with stable identity.
+
+Examples:
+
+- track
+- clip
+- device
+- block
+- span
+- cell
+- chart
+- node
+- layer
+
+An entity answers:
+
+> what is the thing the user can point to and say "that one"?
+
+An entity is usually:
+
+- a product type
+- given a stable numeric ID
+- marked `unique` when it is a concrete ASDL type
+- owned by exactly one parent in the containment tree
+
+Example:
+
+```asdl
+Editor.Document = (Block* blocks, Selection selection) unique
+Editor.Block = (number id, BlockKind kind, Span* spans) unique
+Editor.Span = (number id, SpanKind kind, string text) unique
+```
+
+Here `Document`, `Block`, and `Span` are entities because the user can independently reason about them, edit them, and expect them to persist across save/load and undo.
+
+A useful non-example is:
+
+```asdl
+Editor.Block = (number id, string text, number line_count) unique
+```
+
+If `line_count` is derived from `text`, it is not a user-authored entity and should not even be a source property. It belongs in a later projection if some consumer needs it.
+
+#### 5.0.4 Variant
+
+A **variant** is a real domain “or”.
+
+Examples:
+
+- a clip is audio **or** MIDI
+- a selection is cursor **or** range
+- a chart is bar **or** line **or** pie
+- a node is gain **or** filter **or** oscillator
+
+A variant answers:
+
+> what closed set of kinds can this thing be?
+
+A variant is usually a sum type.
+
+Example:
+
+```asdl
+Editor.Selection = Cursor(number span_id, number offset)
+                 | Range(number start_span_id, number start_offset,
+                         number end_span_id, number end_offset)
+
+Editor.BlockKind = Paragraph
+                 | Quote
+                 | CodeBlock(string language)
+```
+
+This is better than string tags because it gives:
+
+- exhaustiveness
+- variant-specific payloads
+- explicit domain closure
+- cleaner downstream lowering
+
+The smell to watch for is:
+
+```asdl
+Editor.Block = (number id, string kind, string text, string language) unique
+```
+
+If `kind` is a closed set, it wants to be a sum type. Otherwise every later boundary is forced to re-interpret the string.
+
+#### 5.0.5 Projection
+
+A **projection** is a derived ASDL view of another ASDL.
+
+Examples:
+
+- source → view
+- source → resolved
+- resolved → scheduled
+- document → outline
+- graph → render tree
+- source → machine IR
+
+A projection answers:
+
+> what derived shape do later consumers need that should not distort the source ASDL?
+
+Projection matters because the source ASDL models the user’s world, not every consumer’s world.
+
+Example:
+
+```asdl
+Editor.Track = (number id, string name, Device* devices) unique
+```
+
+A view might need:
+
+- a track header row
+- a mixer strip
+- a device panel
+- selected styling
+- hit targets
+
+Those do not belong in `Editor.Track`. A better design is a projection:
+
+```asdl
+View.TrackHeader = (number track_id, string label, bool selected)
+View.MixerStrip = (number track_id, string label, number meter_db)
+View.DevicePanel = (number track_id, DeviceCard* cards)
+```
+
+Likewise, a resolve phase is also a projection:
+
+```asdl
+Editor.Send = (number id, number target_track_id, number gain_db) unique
+Resolved.Send = (number id, number target_track_id, number gain_db,
+                 number target_bus_ix) unique
+```
+
+`Resolved.Send` has consumed a routing decision without polluting the source ASDL with derived scheduling facts.
+
+#### 5.0.6 Spine, header, and shared alignment
+
+A **spine** is a shared structural alignment space used by several downstream branches.
+
+A spine answers:
+
+> what shared structure must later branches remain aligned on?
+
+Typical spine facts include:
+
+- stable identity
+- flattened order
+- parent/child topology
+- subtree spans
+- region-local indices
+- addressability
+- execution order
+
+A spine is usually carried by a header-like product type. That is why this document often uses the phrase **header spine**.
+
+The clean way to think about it is:
+
+- **spine** = the architectural role
+- **header** = the common concrete record that carries that role
+
+So `header` is usually not a separate primitive alongside `spine`. It is the usual carrier of the spine.
+
+Example:
+
+```asdl
+View.Header = (
+    number id,
+    number parent_ix,
+    number start_ix,
+    number end_ix,
+    NodeRole role
+) unique
+```
+
+This is not “mere metadata.” It is shared structural truth that several later branches can align on.
+
+Another example from a scheduled audio phase:
+
+```asdl
+Scheduled.Header = (
+    number node_id,
+    number order_ix,
+    number input_bus_ix,
+    number output_bus_ix,
+    number channel_count
+) unique
+```
+
+This one header can align coefficient computation, meter routing, execution order, and bus allocation without forcing those concerns into one giant lower node.
+
+#### 5.0.7 Facet
+
+A **facet** is one orthogonal semantic plane aligned to a shared spine.
+
+A facet answers:
+
+> given the shared structure, what aspect of this thing are we talking about?
+
+Typical facets include:
+
+- layout facet
+- paint facet
+- content facet
+- behavior facet
+- accessibility facet
+- routing facet
+- query facet
+- animation facet
+
+A facet is not the structure itself. It is semantic meaning attached to a shared structural alignment space.
+
+Example:
+
+```asdl
+View.Header = (
+    number id,
+    number parent_ix,
+    number start_ix,
+    number end_ix,
+    NodeRole role
+) unique
+
+View.ContentFacet = (
+    number id,
+    string text
+) unique
+
+View.LayoutFacet = (
+    number id,
+    number x,
+    number y,
+    number w,
+    number h
+) unique
+
+View.PaintFacet = (
+    number id,
+    Color fg,
+    Color bg,
+    PaintKind paint
+) unique
+
+View.HitFacet = (
+    number id,
+    HitKind hit,
+    number action_id
+) unique
+
+View.A11yFacet = (
+    number id,
+    A11yRole role,
+    string label
+) unique
+```
+
+Now different downstream consumers can take only the semantic planes they need:
+
+- layout lowering uses `Header + ContentFacet`
+- painting uses `Header + LayoutFacet + PaintFacet`
+- hit testing uses `Header + LayoutFacet + HitFacet`
+- accessibility uses `Header + A11yFacet`
+
+That is better than one giant lower node because unrelated edits stay more local and the joins stay structural rather than semantic.
+
+#### 5.0.8 Source roles, lower roles, and realization roles
+
+The same vocabulary does not dominate every phase.
+
+At the **source** level, the dominant roles are:
+
+- entity
+- property
+- variant
+- containment
+- reference
+
+Questions at this layer are:
+
+- what are the user-visible nouns?
+- which nouns have stable identity?
+- what fixed choices are true domain variants?
+- what owns what?
+- what cross-links are real authored references?
+
+At **lower semantic** phases, the dominant roles become:
+
+- projection
+- spine
+- facet
+- schedule/order/index/address records
+- closed terminal payloads
+
+Questions at this layer are:
+
+- what derived shape does the machine need?
+- what structural alignment must later branches share?
+- which meanings should be separated into orthogonal facets?
+- what decisions must be consumed before the terminal?
+
+At the **realization** layer, the dominant roles may become:
+
+- proto / realizable unit
+- template family
+- binding schema
+- artifact family
+- shape key
+- artifact key
+- install catalog
+- bytecode / source-kernel / native policy record
+
+Questions at this layer are:
+
+- what is the realizable unit of installation or caching?
+- what values are bound as binding payload rather than re-emitted structurally?
+- what identity belongs to machine shape versus concrete installed artifact?
+- what backend policy choices are explicit here?
+- what artifact form should be produced?
+
+Leaf-first design sharpens these questions. Once you begin at the leaf, you usually discover two different smallest truthful things:
+
+1. the smallest truthful **machine**
+2. the smallest truthful **installable realization unit**
+
+The first belongs to semantic compilation. The second belongs to realization. When that second unit needs stable identity, packaging, binding, install metadata, or cacheability, it becomes a realization noun — often a **proto**.
+
+So `Proto` should not be pulled upward as a fashionable generic term into the domain source phase. But it should be treated as architecturally universal on the realization side. Every machine crosses a proto boundary, even if the proto is almost empty. It becomes rich when leaf-first design reveals that the backend really does need one named realizable member of a machine family with a specific install story.
+
+Proto also forces specialization. A machine forces semantic specialization; a proto forces realization specialization. Once something is a proto, the backend/install layer must commit to a concrete realizable family, a concrete binding surface, and a concrete artifact identity instead of hiding behind generic installer glue.
+
+This is why `spine + facets` is a canonical semantic lowering shape but usually not the first move in source modeling, and why proto/artifact vocabularies usually belong at realization rather than at the domain source phase.
+
+A practical rule is:
+
+> if the noun only exists because something must be emitted, loaded, cached, restored, or installed, it is probably a realization noun, not a source-domain noun.
+
+#### 5.0.9 Worked example: source entities become a view spine plus facets
+
+Suppose a small document editor has paragraphs, code blocks, links, and selections.
+
+A good source ASDL might be:
+
+```asdl
+Editor.Document = (Block* blocks, Selection selection) unique
+
+Editor.Block = (number id, BlockKind kind, Span* spans) unique
+Editor.BlockKind = Paragraph
+                 | Quote
+                 | CodeBlock(string language)
+
+Editor.Span = (number id, SpanKind kind, string text) unique
+Editor.SpanKind = Text
+                | Emphasis
+                | Link(number target_block_id)
+
+Editor.Selection = Cursor(number span_id, number offset)
+                 | Range(number start_span_id, number start_offset,
+                         number end_span_id, number end_offset)
+```
+
+This is source-authored truth:
+
+- entities: `Document`, `Block`, `Span`
+- variants: `BlockKind`, `SpanKind`, `Selection`
+- reference: `target_block_id`
+- containment: document owns blocks, blocks own spans
+
+Now suppose a later view pipeline flattens the document for layout, paint, hit testing, and accessibility.
+
+A bad lower design is one giant node:
+
+```asdl
+BadView.Node = (
+    number id,
+    number parent_ix,
+    number start_ix,
+    number end_ix,
+    Rect rect,
+    string text,
+    PaintKind paint,
+    HitKind hit,
+    A11yRole a11y_role,
+    string a11y_label,
+    bool selected
+) unique
+```
+
+A better design is:
+
+```asdl
+View.Header = (
+    number id,
+    number parent_ix,
+    number start_ix,
+    number end_ix,
+    NodeRole role
+) unique
+
+View.ContentFacet = (number id, string text) unique
+View.LayoutFacet = (number id, number x, number y, number w, number h) unique
+View.PaintFacet = (number id, PaintKind paint, bool selected) unique
+View.HitFacet = (number id, HitKind hit, number action_id) unique
+View.A11yFacet = (number id, A11yRole role, string label) unique
+```
+
+Now:
+
+- the source ASDL stayed honest to the domain
+- the lower ASDL introduced a projection
+- the projection split into one spine plus several facets
+- downstream consumers remain aligned structurally without carrying unrelated facts together
+
+#### 5.0.10 Worked example: scheduled audio as projection + spine + specialized payloads
+
+Consider a source audio graph:
+
+```asdl
+Editor.Project = (Track* tracks) unique
+Editor.Track = (number id, string name, Device* devices, Send* sends) unique
+Editor.Send = (number id, number target_track_id, number gain_db) unique
+
+Editor.Device = Osc(number id, number hz)
+              | Gain(number id, number db)
+              | Filter(number id, number hz, number q)
+```
+
+Here the source phase contains:
+
+- entities: project, track, send, device instances
+- variants: `Device`
+- references: `target_track_id`
+
+A resolve phase may attach validated bus routing:
+
+```asdl
+Resolved.Send = (
+    number id,
+    number target_track_id,
+    number gain_db,
+    number target_bus_ix
+) unique
+```
+
+A later schedule phase may establish a shared execution spine:
+
+```asdl
+Scheduled.Header = (
+    number node_id,
+    number order_ix,
+    number input_bus_ix,
+    number output_bus_ix,
+    number channel_count
+) unique
+
+Scheduled.OscPayload = (number node_id, number hz) unique
+Scheduled.GainPayload = (number node_id, number linear_gain) unique
+Scheduled.FilterPayload = (
+    number node_id,
+    number hz,
+    number q,
+    double* coeffs
+) unique
+```
+
+At this stage the important move is not to drag the entire authored variant shape into the hot path. The terminal should receive a narrow, phase-local, monomorphic payload. If the leaf is still switching on authored strings or wide source variants, the lowering is incomplete.
+
+#### 5.0.11 The design game is mostly composition
+
+Once the vocabulary is explicit, many good designs reduce to a few recurring compositions:
+
+- **entity + variant** — a persistent thing with meaningful kinds
+- **entity + reference** — a persistent thing that points outside containment
+- **projection + spine** — a derived phase that several later consumers must align on
+- **spine + facets** — shared structure with orthogonal semantic planes
+- **projection → closed payload** — the narrowing move just before the terminal
+
+That is why good ASDL design is less about inventing many special-purpose shapes and more about composing a small number of roles correctly.
+
+The operational steps below are how to discover those roles in a real domain.
+
 ### 5.1 Step 1: List the nouns
 
-Open the program you're modeling (or imagine it if it doesn't exist). Look at every element the user can see and interact with. Write down every noun.
+Start by asking a precise question:
+
+> whose language am I modeling right now?
+
+There are two common answers:
+
+1. **the domain user's language**
+2. **the realization author's language**
+
+Most of the time, Part 5 starts with the first one. You are modeling the domain source ASDL. In that case, open the program you're modeling (or imagine it if it doesn't exist), look at every element the user can see and interact with, and write down every noun.
 
 For a DAW:
 ```
@@ -570,7 +1795,40 @@ chart, axis, series, data point, filter, sort, pivot table,
 named range, validation rule, comment, hyperlink
 ```
 
-### 5.2 Step 2: Find the identity nouns
+If instead you are modeling a **realization framework**, the “user” at that layer is usually a compiler/backend author, not the app end-user. Then the honest nouns may be things like:
+
+```
+proto, catalog, template, binding plan, install mode,
+artifact, shape key, artifact key, bytecode blob,
+chunk name, install entry, host contract
+```
+
+That is fine — if and only if that really is the language being authored.
+
+The critical rule is:
+
+> do not pull proto nouns upward into the domain source language just because you know they will matter later.
+
+A JSON parser source language should usually start from:
+- grammar
+- token
+- rule
+- product
+
+not from:
+- proto
+- chunk
+- bytecode blob
+
+Those may become the right nouns later at realization time, but they are not automatically the right nouns at the domain source phase.
+
+So Step 1 is really:
+
+1. identify the layer you are modeling
+2. list the nouns that are truthful at that layer
+3. refuse nouns from lower layers unless they are genuinely authored there
+
+### 5.2 Step 2: Find the identity nouns (entities)
 
 Not all nouns are equal. Some are THINGS with identity — they persist, they can be referenced, they can be edited independently. Others are PROPERTIES of things — they change when the thing changes, they don't have independent identity.
 
@@ -591,7 +1849,7 @@ DAW:
 
 Identity nouns become ASDL records or enum variants. Property nouns become fields ON those records.
 
-### 5.3 Step 3: Find the sum types
+### 5.3 Step 3: Find the sum types (variants)
 
 Sum types represent CHOICES — places where the domain has more than one possibility. They are the most important types in the source phase because they represent UNRESOLVED DECISIONS.
 
@@ -623,6 +1881,8 @@ Each "or" becomes an ASDL enum. Each option becomes a variant. This is where dom
 ### 5.4 Step 4: Find the containment hierarchy
 
 Domain objects contain other domain objects. The containment forms a tree (or DAG). This tree IS the ASDL structure.
+
+Containment is the default structural relation because it is local, memo-friendly, and easy to reason about. References are the exception. If a relationship is really ownership, model ownership. If a relationship is truly a non-owning cross-link, represent it as a stable ID and plan an explicit resolve phase for it later.
 
 ```
 DAW:
@@ -677,6 +1937,21 @@ Project = (string name, Track* tracks, Transport transport, ...) unique
 Track = (number id, string name, DeviceChain devices, Clip* clips, ...) unique
 DeviceChain = (Device* devices) unique
 ```
+
+Now apply the reference discipline carefully.
+
+A useful rule is:
+
+> containment is the default; references are controlled escapes from the tree.
+
+That means:
+
+- use references only for real authored cross-links
+- represent them as stable IDs, never positions or live pointers
+- treat every reference as a coupling signal
+- consume references into more local structure in a later resolve phase as early as possible
+
+If references start appearing everywhere, suspect the ASDL before normalizing the complexity away in runtime code.
 
 ### 5.5 Step 5: Find the coupling points
 
@@ -740,6 +2015,14 @@ The method:
 3. Order them by dependency (coupling points determine order)
 4. Group decisions that must happen together (coupling)
 5. Each group becomes a phase transition
+
+Another useful framing is:
+
+- source phases are dominated by **entities**, **variants**, containment, and references
+- intermediate phases are usually **projections** that consume decisions
+- when several later branches need the same structural alignment, introduce a **spine**
+- when those branches need different semantic facts, split those facts into **facets**
+- terminal-adjacent phases should collapse toward closed monomorphic payloads
 
 ```
 DAW phases:
@@ -1289,6 +2572,8 @@ Source ASDL ──transition──> ... ──terminal──> Execution Unit
 
 The execution pipeline produces the domain output (audio, computed cells, game frame). The view pipeline produces the visual representation (pixels on screen). Both start from the same source ASDL. Both are memoized independently. Editing the source recompiles both — but only the changed subtrees.
 
+View is an important pattern here, but it should not be mistaken for a mandatory top-level filesystem doctrine. Sometimes a project has a substantial explicit View ASDL family. Sometimes the view path is smaller and more local. The architectural point is the projection boundary and the preserved semantic refs, not a required repo taxonomy.
+
 #### The view is NOT the source
 
 The View ASDL is different from the source ASDL. The source represents the user's domain model. The View represents the visual presentation of that model. They are different shapes:
@@ -1370,7 +2655,7 @@ Scheduled phase:
 
 Each phase should have fewer sum types than the previous phase. This is the NARROWING property. If a phase adds sum types, something is wrong — you're creating decisions instead of consuming them.
 
-The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just concrete fields and predictable access paths. This is what lets the backend optimize aggressively — whether that is LLVM on Terra or host-JIT specialization on LuaJIT — because there is nothing semantic left to dispatch on.
+The terminal phase has ZERO sum types. Everything is concrete. No branches, no dispatch, no type checks. Just concrete fields and predictable access paths. This is what lets the backend optimize aggressively — whether that is LLVM on Terra or host-JIT specialization and bytecode-template realization on LuaJIT — because there is nothing semantic left to dispatch on.
 
 ```
 Phase          Sum types          What they represent
@@ -1582,6 +2867,258 @@ Symptom: a boundary function is doing two unrelated things. It resolves cross-re
 
 Fix: split into two phases. Each boundary should do ONE kind of knowledge consumption. If it does two, you're missing a phase between them.
 
+### 6.8 Realization nouns do not belong in the source ASDL
+
+A very common new mistake is to pollute the source language with nouns that only exist because of backend installation.
+
+If the user is authoring a parser grammar, the honest source nouns are things like:
+- grammar
+- token
+- rule
+- constructor
+- product
+
+Not:
+- proto
+- chunk name
+- bytecode blob
+- install mode
+- artifact key
+- closure cache entry
+
+Those may be excellent **proto nouns** later. They are usually bad **source nouns**.
+
+#### Anti-pattern: source polluted by artifact forms
+
+```asdl
+WRONG:
+    ParserRule = (
+        number id,
+        string name,
+        Expr expr,
+        string emitted_chunk_name,
+        string bytecode_blob,
+        string install_mode
+    ) unique
+
+RIGHT:
+    FrontendSource.Rule = (
+        number id,
+        string name,
+        Expr expr,
+        Result result
+    ) unique
+    -- chunk names, bytecode, install mode belong in realization.
+```
+
+The test is simple:
+
+> if a field only matters because something will later be emitted, cached, loaded, restored, or installed, it probably does not belong in the source ASDL.
+
+#### Anti-pattern: backend policy encoded as a source-domain sum type
+
+```asdl
+WRONG:
+    Widget = Button(..., BackendMode mode) | Text(..., BackendMode mode)
+    BackendMode = SourceMode | BytecodeMode | ClosureMode
+
+RIGHT:
+    Ui.Source.Widget = Button(...) | Text(...)
+    -- realization policy is chosen below the machine boundary,
+    -- not inside the domain source language.
+```
+
+The source language should describe what the user means in the domain. Realization policy should describe how the backend hosts that meaning.
+
+### 6.9 Artifact forms are not source truth
+
+Template definitions, binding payloads, bytecode blobs, loaded artifacts, bundles, and install catalogs are all artifact forms.
+
+They may be:
+- important
+- explicit
+- typed
+- cacheable
+- worth modeling honestly
+
+But they are still **downstream of source truth**.
+
+#### Anti-pattern: treating bytecode as authored truth
+
+```asdl
+WRONG:
+    Tool = (
+        ScriptSource source,
+        string cached_bytecode
+    ) unique
+    -- which one is the truth when they diverge?
+
+RIGHT:
+    ToolSource = (
+        ScriptSource source
+    ) unique
+
+    ToolRealize.BytecodeArtifact = (
+        string key,
+        bytes blob
+    ) unique
+    -- source is source truth; bytecode is installed artifact.
+```
+
+If save/load, undo, collaboration, or semantic editing would become ambiguous because an artifact form is mixed into the source record, the design is wrong.
+
+The rule is:
+
+> artifacts may be explicit, but they are never the authored source of truth.
+
+### 6.10 Proto footguns
+
+Proto is powerful because it forces realization specialization. That also means proto has its own failure modes. These should be named explicitly.
+
+#### Footgun 1: inventing a rich proto too early
+
+```asdl
+WRONG:
+    ProjectProto = (
+        TemplateFamily template,
+        BindingPlan bindings,
+        ArtifactKey key,
+        InstallCatalog catalog,
+        BytecodeBlob blob,
+        SourceKernel src,
+        ...
+    ) unique
+    -- before any leaf has proven these nouns are needed
+```
+
+If the honest install story is still just:
+
+```text
+machine -> closure -> Unit
+```
+
+then a large proto ASDL is premature.
+
+Rule:
+
+> every machine crosses a proto boundary, but not every machine needs a rich proto language.
+
+Start with the thinnest proto that makes installation truthful. Let the leaves force richness upward.
+
+#### Footgun 2: keeping proto generic too long
+
+```lua
+WRONG:
+install(proto)
+    if proto.kind == "closure" then ...
+    elseif proto.kind == "template" then ...
+    elseif proto.kind == "kernel" then ...
+    elseif proto.kind == "catalog" then ...
+    ...
+```
+
+A proto is supposed to force specialization. If one installer keeps rediscovering what family something “really” is, the proto boundary is still too vague.
+
+Rule:
+
+> proto is where realization stops being generic.
+
+Split unrelated install families. Give them distinct proto variants or distinct phases.
+
+#### Footgun 3: treating proto as source truth
+
+```asdl
+WRONG:
+    Widget = (number id, string text, Proto proto) unique
+```
+
+If save/load, undo, collaboration, or authored editing would become ambiguous when proto changes, then proto has leaked upward.
+
+Rule:
+
+> source says what the user means; proto says how the machine is installed.
+
+Proto belongs below the machine boundary, unless the user is literally authoring install artifacts.
+
+#### Footgun 4: collapsing machine identity, proto identity, and artifact identity
+
+These are often related, but they are not always the same:
+
+- **machine identity** — semantic execution shape
+- **proto identity** — realizable/installable family member
+- **artifact identity** — concrete installed/restored payload
+
+If these are collapsed casually, caches become confusing and invalidation becomes accidental.
+
+Rule:
+
+> decide explicitly which edits change machine shape, which only change proto binding, and which only change concrete artifact payload.
+
+#### Footgun 5: hidden binding contracts
+
+```lua
+WRONG:
+local f = load(blob)
+debug.setupvalue(f, 1, value_a)
+debug.setupvalue(f, 2, value_b)
+-- why 1 and 2? what do they mean?
+```
+
+If a proto depends on binding order, the binding schema must be explicit.
+
+Rule:
+
+> no magical upvalue slots.
+
+Binding plan means: slot, meaning, source, and expected family.
+
+#### Footgun 6: using source kernels as an escape hatch for unfinished lowering
+
+`load` / `loadstring` are valid proto paths when source kernels are the honest artifact. They are a footgun when they hide unresolved semantics.
+
+Bad sign:
+- source generation still branches on broad semantic variants
+- the kernel builder rediscovers references that should already be resolved
+- huge bespoke strings are assembled because the machine was never narrowed enough
+
+Rule:
+
+> source-kernel proto is valid only when the kernel family is already known.
+
+#### Footgun 7: one proto spanning unrelated host contracts
+
+Audio callback installation, view-frame installation, network handler installation, export artifact packaging — these may all be proto languages, but they are not necessarily one proto family.
+
+If one proto node is trying to describe several unrelated host worlds, the host-contract boundary is too weak.
+
+Rule:
+
+> a proto family should belong to one host contract story.
+
+#### Footgun 8: letting proto do semantic work
+
+Proto should package already-decided structure. It should not:
+- rediscover domain meaning
+- resolve references that should have been resolved earlier
+- interpret wide semantic sums at install time
+- act as a second hidden semantic compiler
+
+Rule:
+
+> if proto construction wants to reinterpret the source, the phases above it are wrong.
+
+These are the core proto footguns:
+- proto too rich too early
+- proto too generic too late
+- proto leaked into source truth
+- identity layers collapsed carelessly
+- binding contracts hidden
+- source kernels used as semantic escape hatches
+- unrelated host contracts forced into one proto
+- proto doing semantic work it should only package
+
+A good proto layer is narrow, explicit, specialized, and downstream of already-decided machine meaning.
+
 ---
 
 ## Part 7: Implementation
@@ -1608,7 +3145,12 @@ Two memoization wrappers declare the boundary's role in the pipeline:
 
 **`U.transition(name, fn)`** — a memoized phase transition. Takes a node from phase N, returns a node in phase N+1.
 
-**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final phase, uses the pure structural authoring vocabulary to define the canonical machine for that node, and returns its packaged `Unit { fn, state_t }` realization.
+**`U.terminal(name, fn)`** — a memoized terminal compilation. Takes a node from the final semantic phase, uses the pure structural authoring vocabulary to define the canonical machine for that node, and returns either:
+- that machine,
+- a thin proto/install form,
+- or a packaged `Unit { fn, state_t }` when the proto boundary is maximally collapsed.
+
+Conceptually, `U.terminal(...)` ends semantic compilation. The returned machine or lowered result then feeds the proto layer rather than forcing installation concerns back upward into the source-domain phases.
 
 That's it. No other primitives are needed. If a boundary function reaches for something outside this set — a `for` loop, a `table.insert`, a mutable accumulator, a context argument, a sibling lookup — the ASDL is wrong.
 
@@ -1705,36 +3247,98 @@ When a boundary resists these constraints, the resistance is diagnostic. It tell
       separated into different lists by a prior phase.
 ```
 
-### 7.4 Leaves-up discovery
+### 7.4 Leaves-up discovery: leaf → machine → realization → Unit
 
-The modeling method (Part 2) gives you a first draft of the ASDL. That draft is a hypothesis. Implementation tests it. The testing direction is bottom-up: start at the leaves, let each leaf tell you what the layers above must provide, and fix the ASDL from the bottom up.
+The modeling method gives you a first draft of the ASDL. That draft is a hypothesis. Implementation tests it.
+
+The testing direction is bottom-up:
+
+1. imagine the leaf you want
+2. make the canonical machine explicit
+3. decide whether the proto stays thin or expands into richer structure
+4. derive the ASDL above from those constraints
+
+The sequence is not merely:
+
+```text
+leaf → Unit
+```
+
+The more honest sequence is:
+
+```text
+leaf intent → canonical Machine → proto language / realization policy → installed Unit/artifact
+```
+
+That sequence should guide implementation.
 
 #### Write the leaf you want to write
 
-Don't start by implementing the full pipeline top-down. Start at the leaf — the function that takes one phase-local node, defines the machine you want, and produces the packaged `Unit` for it. Write the leaf you WANT to write, the one that would be natural if the ASDL were perfect.
-
-This is not a trick for implementation. It is the core design method.
+Don't start by implementing the full pipeline top-down. Start at the leaf — the smallest function that tells the truth about the machine you wish existed.
 
 After you identify the top-level domain nouns and draft the source ASDL, the next question is not:
 
 > how do I fit this feature into the current runtime architecture?
 
-The next question is:
+The next questions are:
 
 > what machine do I wish I could install?
+>
+> and what is the smallest proto that would install it honestly?
 
 That means imagining the highest-performance stable kernel that would execute this domain well:
 
-- what would the terminal `fn` actually do in the hot path?
-- what would its `state_t` need to own live across calls?
-- what values should be baked into code?
-- what values should stay live in state?
-- should it walk a tree, or a flat plan, or a packed command stream?
-- should it be one monomorphic runner, or a composition of genuine submachines?
+- what would the hot path actually do?
+- what would `gen` be?
+- what stable payload belongs in `param`?
+- what mutable payload belongs in `state`?
+- what should be baked into code shape?
+- what should stay live across calls?
+- should the machine walk a tree, a flat plan, an array pack, or a command stream?
+- should the proto stay thin as a direct closure/native path, or expand into a structural install artifact like template / bytecode blob / binding plan / source-kernel family?
 
 Only after you can picture that machine should you ask what phase-local data structure would feed it cleanly.
 
-The leaf immediately tells you what its input node must contain. A sine oscillator leaf needs frequency, waveform shape, gain. A biquad filter leaf needs pre-computed coefficients. A text renderer leaf needs resolved font metrics and glyph positions. A UI kernel leaf may need flat boxes, clip ranges, hit-test regions, and draw commands. If the terminal input node doesn't have those fields — if the leaf can't get what it needs from its single argument — the ASDL is wrong.
+#### The terminal question is really two questions
+
+A healthy terminal design separates two distinct questions:
+
+1. **machine question** — what is the semantic executable abstraction?
+2. **proto question** — what is the smallest installable realization unit for that machine on this backend?
+
+Sometimes the proto answer is thin:
+- define the machine
+- lower to a thin closure/native proto
+- install as a Unit
+
+Sometimes the proto answer is rich:
+- define the machine
+- lower to a proto language or artifact plan
+- install that plan as the runtime artifact
+
+Leaf-first work often reveals that the realization side also has its own leaf. After you discover the machine you want, the next bottom-up question is:
+
+> what is the smallest installable thing that would host this machine honestly?
+
+Sometimes the answer is simply a closure. Sometimes it is a template family plus binding schema. Sometimes it is a source-kernel family. Sometimes it is a named installable unit with cache identity and install metadata. When that smallest installable thing has stable structure, it deserves its own realization noun — often a **proto**.
+
+That is why proto-like vocabularies are often discovered from the bottom rather than invented from the top. They are what falls out when a backend/install leaf needs truthful identity and packaging.
+
+If the backend/install story has its own real nouns — artifact family, binding schema, install key, template family, bytecode blob, source-kernel family — then realization probably deserves explicit structure.
+
+When making that move, check the proto footguns in §6.10. In particular: do not inflate proto before the leaf requires it, do not keep proto generic once specialization is honest, and do not let proto construction rediscover semantic meaning.
+
+#### Don’t fix the leaf. Fix the layer above it.
+
+The leaf immediately tells you what its input node must contain.
+
+A sine oscillator leaf needs frequency, waveform shape, gain.
+A biquad filter leaf needs pre-computed coefficients.
+A text renderer leaf needs resolved font metrics and glyph positions.
+A UI kernel leaf may need flat boxes, clip ranges, hit-test regions, and draw commands.
+A structural realization leaf may need proto identity, template family, binding schema, shape key, and bytecode blob.
+
+If the terminal input node does not have those fields — if the leaf cannot get what it needs from its single argument — the ASDL is wrong.
 
 Don't fix the leaf. Fix the layer above.
 
@@ -1753,9 +3357,9 @@ Ui.Source.Widget
 
 That is the authored tree — the vocabulary the user or library author works with. It is the right source shape because UI is authored hierarchically.
 
-Now stop looking at the source tree and imagine the installed machine you actually WANT.
+Now stop looking at the source tree and imagine the machine you actually want.
 
-A high-performance UI kernel probably does **not** want to traverse that authored tree every frame. It probably wants a stable function with one or a few tight loops over flat payload:
+A high-performance UI backend probably does **not** want to traverse that authored tree every frame. It probably wants one stable machine over flat payload:
 
 ```lua
 terra ui_kernel(plan: &UiPlanState, input: &InputState, out: &GpuBuffer)
@@ -1783,15 +3387,17 @@ UiPlanState = struct {
 }
 ```
 
-That imagined kernel tells you several truths immediately:
+That imagined machine tells you several truths immediately:
 
-1. The kernel does not want symbolic bindings.
-2. The kernel does not want the authored tree shape.
-3. The kernel does not want unresolved constraints.
-4. The kernel probably wants one stable runner over packed plan data.
-5. Therefore the final phase before compilation should not be `Widget`. It should be something like `Ui.Plan`.
+1. the kernel does not want symbolic bindings
+2. it does not want the authored tree shape
+3. it does not want unresolved constraints
+4. it wants one stable runner over packed plan data
+5. therefore the final semantic phase before terminalization should not be `Widget`; it should be something like `Ui.Plan`
 
-So now you can derive the phase path backward:
+If the backend then emits a tiny Lua kernel rather than going directly to a closure or native function, that is a **realization choice**, not a reason to contaminate the source ASDL with kernel-emission nouns.
+
+So now you can derive the path backward:
 
 ```lua
 Ui.Source.WidgetTree
@@ -1803,40 +3409,55 @@ Ui.Flat.Region*
 Ui.Solved.Region*
     ↓ build_plan
 Ui.Plan.Scene
-    ↓ compile_kernel
+    ↓ define_machine
+Ui.Machine.Scene
+    ↓ realize_luajit | realize_terra
 Unit { fn, state_t }
 ```
 
-Notice what happened. The kernel shape forced the terminal input shape. The terminal input shape forced the solved phase. The solved phase forced the flattening phase. The flattening phase forced a prior binding-resolution phase. This is the method.
+If the Lua path needs explicit emitted-artifact structure, it may instead become:
 
-The source tree was still designed from the user domain. But once the user domain is known, the downstream phases are discovered by asking what the installed machine wants, then recursively asking what each prior layer must provide.
+```lua
+Ui.Machine.Scene
+    ↓ prepare_install
+Ui.Realize.Plan
+    ↓ install
+Unit { fn, state_t }  -- or install catalog wrapping callable artifacts
+```
 
-This is what "leaf-first" means in practice:
+That is still the same architecture. It is just a richer proto layer.
 
-- not "start with implementation details and retrofit the domain"
-- but "after modeling the domain, design the machine you wish you could install, then derive the ASDL that makes compiling to it mechanical"
-
-#### What to inspect in the imagined kernel
+#### What to inspect in the imagined leaf and machine
 
 When you imagine the leaf, inspect these questions explicitly.
 
-**Code shape**
+**Machine shape**
 - Is the hot path one stable loop or many small submachines?
-- Should child calls remain visible, or disappear via inlining?
+- What is `gen`?
+- What belongs in `param`?
+- What belongs in `state`?
 - Does runtime still dispatch on a sum type that should have been consumed earlier?
 
-**State shape**
-- What facts change often but should not trigger recompilation?
-- What runtime history must persist in `state_t`?
-- What payload should live in parent state rather than in many child Units?
+**Realization shape**
+- Is direct closure/native realization enough?
+- Does the backend need explicit artifact families?
+- Is there a shape key distinct from artifact key?
+- Are binding schemas or install metadata real nouns here?
+- Should template families stay fixed while larger payload binds separately?
 
 **Memory shape**
 - Does the machine want arrays, trees, command streams, or region-local payload?
-- Should the plan be packed by region, by z-order, by text run, by draw material?
+- Should the plan be packed by region, z-order, text run, material, or schedule order?
 
 **Boundary shape**
-- What is the ideal function signature?
-- What is the smallest terminal input node that makes the leaf trivial?
+- What is the ideal function or machine signature?
+- What is the smallest terminal input node that makes the machine trivial?
+- If the proto is rich, what is the smallest proto node that makes installation trivial?
+
+This is what “leaf-first” means in practice:
+
+- not “start with implementation details and retrofit the domain”
+- but “after modeling the domain, design the machine you wish you could install, then derive the semantic ASDL and proto layer that make that installation mechanical”
 
 These questions are architectural, not micro-optimization. The goal is not to hand-tune LLVM. The goal is to choose the right machine shape so the phases above it become obvious.
 
@@ -2136,7 +3757,7 @@ At that point, the ASDL is the architecture, and the architecture is done. New f
 
 ---
 
-## Part 9: The Backend-Neutral Architecture
+## Part 9: The Backend-Neutral Architecture and Realization Policy
 
 ### 9.1 The pattern is not Terra
 
@@ -2144,50 +3765,58 @@ This architecture was historically called the Terra Compiler Pattern because Ter
 
 But the deeper discovery is: **the pattern is not fundamentally about Terra.**
 
-The pattern is: the user is editing a program in a domain language, that program is represented as source ASDL, input is represented as Event ASDL, state changes are modeled by a pure Apply reducer, unresolved knowledge is consumed across real phases, lower phases become machine-feeding structures, terminals define canonical machines, backends package those machines as executable Units, and execution runs those Units until the source changes again.
+The pattern is: the user edits a program in a domain language, that program is represented as source ASDL, input is represented as Event ASDL, state changes are modeled by a pure Apply reducer, unresolved knowledge is consumed across real phases, lower phases become machine-feeding structures, terminals define canonical machines, realization turns those machines into installable artifacts, and execution runs the installed result until the source changes again.
 
-None of that requires Terra specifically. Terra is one way to realize the backend step — a very strong one — but still just one backend.
+None of that requires Terra specifically. Terra is one realization style — a very strong one — but still just one backend story.
 
 Terra revealed the pattern. It did not define it.
 
-### 9.2 The three-layer architecture
+### 9.2 The three-layer architecture, with realization explicit
 
-The architecture has three layers:
+The architecture still has three layers, but the lower boundary must now be read more precisely.
 
 ```
-┌───────────────────────────────────────────────┐
-│                 YOUR DOMAIN                   │
-│                                               │
-│  source ASDL, Event ASDL, Apply,              │
-│  phase structure, projections, Machine IR      │
-│  intent, domain semantics                     │
-│                                               │
-│  This is your application.                    │
-├───────────────────────────────────────────────┤
-│               THE PATTERN                     │
-│                                               │
-│  Machine IR, Unit, gen/param/state,           │
-│  transition, terminal, memoize, match, with, │
-│  fallback, errors, inspect                    │
-│                                               │
-│  This is the compiler architecture vocabulary │
-│  used to express the app.                     │
-├───────────────────────────────────────────────┤
-│                THE BACKEND                    │
-│                                               │
-│  leaf realization, state layout, compose      │
-│  realization, installation, hot swap,         │
-│  target drivers, host compiler/JIT            │
-│                                               │
-│  This is target-specific.                     │
-└───────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                         YOUR DOMAIN                        │
+│                                                             │
+│  source ASDL, Event ASDL, Apply, phase structure,           │
+│  projections, Machine IR, terminal intent,                  │
+│  domain semantics                                           │
+│                                                             │
+│  This is your application.                                  │
+├─────────────────────────────────────────────────────────────┤
+│                         THE PATTERN                         │
+│                                                             │
+│  transitions, terminal, memoize, match, with, errors,      │
+│  Machine IR, canonical Machine (gen/param/state),          │
+│  realization-aware terminal reasoning, inspect              │
+│                                                             │
+│  This is the compiler architecture vocabulary               │
+│  used to express the app.                                   │
+├─────────────────────────────────────────────────────────────┤
+│                    THE REALIZATION / BACKEND                │
+│                                                             │
+│  direct closure/native realization, structural realization  │
+│  frameworks, template/blob/bind paths, artifact families,   │
+│  install                                                    │
+│  catalogs, state layout, composition, hot swap, drivers,    │
+│  host compiler/JIT                                           │
+│                                                             │
+│  This is target-specific.                                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Layer 1: Domain** — The application's actual semantic content. Source ASDL, Event ASDL, Apply, the real phases, projections, Machine IRs, terminal inputs. This is where questions like "what is a track?" and "what should save/load preserve?" live. This layer is not backend-specific.
+**Layer 1: Domain** — The application's semantic content. Source ASDL, Event ASDL, Apply, real phases, projections, Machine IRs, terminal inputs. This is where questions like “what is a track?” and “what should save/load preserve?” live. This layer is not backend-specific.
 
-**Layer 2: Pattern** — The reusable compiler vocabulary. Machine IR thinking, canonical `gen/param/state` machine thinking, Unit, transition, terminal, memoize, match, with, errors, inspect. This layer is not the app's semantics, but it gives the app a disciplined way to express them.
+**Layer 2: Pattern** — The reusable compiler vocabulary. Transition, terminal, Machine IR thinking, canonical `gen/param/state` machine thinking, memoize, match, with, errors, inspect. This layer is not the app's semantics, but it gives the app a disciplined way to express them.
 
-**Layer 3: Backend** — How a leaf becomes executable code on this target. How runtime state is represented. How Units are installed and swapped. How external drivers are called. This is where Terra and LuaJIT differ.
+**Layer 3: Realization / Backend** — How a machine becomes executable on this target. How runtime state is represented. What the proto language looks like on this backend — thin direct-install forms or richer artifact families. How artifacts are installed and swapped. How external drivers are called. This is where Terra, LuaJIT, source-kernel paths, bytecode-template paths, install catalogs, and other backend stories differ.
+
+A practical way to remember it is:
+
+> the domain says what should exist;
+> the pattern says how to compile it;
+> the realization/backend layer says how that machine lives on this target.
 
 ### 9.3 What should be shared across backends
 
@@ -2198,59 +3827,141 @@ For a well-factored app, the following should be shared:
 - the Apply reducer
 - phase boundaries and their semantic meaning
 - view projection logic
+- Machine IR design
 - terminal intent and terminal input design
 - structural helper logic
-- tests for pure-layer behavior
+- pure-layer tests
+
+In many cases, even the **realization intent** should be shared:
+- whether the proto language is thin or rich
+- what the realizable unit is
+- what shape identity versus artifact identity means
+- what should be baked versus bound
 
 If changing backends requires changing large parts of this core, target concerns leaked too far upward.
 
 ### 9.4 What should vary across backends
 
-- the exact representation of Unit
-- the exact representation of state_t
-- how compose realizes structural aggregation
+The following may legitimately vary:
+
+- the exact representation of `Unit`
+- the exact representation of `state_t`
+- the exact representation of installed artifacts
+- how thin or rich the proto language is on this backend
 - the exact leaf code shape
+- the backend realization policy (direct closure, specialized closure, template/blob/bind path, native path, artifact catalog)
 - installation and hot-swap mechanics
 - driver integration
 - the host compiler or JIT relied upon
 
-### 9.5 Backend policy: LuaJIT by default, Terra by opt-in
+The key discipline is:
 
-This reframing leads to a practical policy:
+> backend variation should change realization policy, not source truth.
+
+### 9.5 Proto languages are first-class backend design
+
+Every machine goes through a proto boundary before it becomes an installed runtime form.
+
+Sometimes the proto language is thin.
+
+Examples:
+- a Terra machine lowered through a thin native proto with native function + native state layout
+- a small LuaJIT machine lowered through a thin direct-closure proto
+
+Other backend stories need a richer proto language.
+
+A richer proto language becomes appropriate when the backend has real nouns such as:
+- artifact family
+- template family
+- binding schema
+- bytecode blob
+- install catalog
+- shape key
+- artifact key
+- upvalue slot order
+- install metadata
+
+When those nouns are real, it is a design improvement to model them honestly rather than hiding them inside ad hoc backend helpers.
+
+This is not an extra architecture layered on top of the pattern. It is the explicit lower realization half of the pattern.
+
+A useful formulation is:
+
+> every backend has a proto language; some keep it thin, others expand it into a richer structural artifact language.
+
+Both are normal.
+
+### 9.6 Backend policy: LuaJIT by default, Terra by opt-in
+
+This reframing still leads to a practical policy:
 
 > **LuaJIT by default. Terra by opt-in.**
 
-That is not a demotion of Terra. It is a clarification of its role.
+That is not a demotion of Terra. It is a clarification of roles.
 
 LuaJIT should be the default backend on JIT-native platforms because:
 
-- the host runtime already provides much of the final compiler (JIT, specialization, native code)
-- terminal construction is extremely cheap compared to LLVM
+- the host runtime already provides much of the final compiler
+- terminal and realization construction are extremely cheap compared to LLVM
 - deployment is lighter, iteration is faster
 - scalar steady-state performance is highly competitive
 - the same architecture applies cleanly
 
-But LuaJIT is NOT the permissive dynamic-tables backend. The backend contract is still strict. Pure phases remain typed ASDL + pure structural transforms. Terminal leaves must lower to monomorphic LuaJIT code over typed FFI/cdata-backed state and payload layouts. If the leaf still wants arbitrary tables, missing-field checks, tag strings, or interpreter-style tree walking, the lowering is not finished.
+But LuaJIT is **not** the permissive dynamic-tables backend. The backend contract is still strict. Pure phases remain typed ASDL + pure structural transforms. Terminal leaves must lower to monomorphic LuaJIT code over typed FFI/cdata-backed layouts or through realization artifacts whose semantics have already been resolved upstream.
 
-### 9.6 What makes Terra special
+A healthy LuaJIT backend usually has a realization ladder:
+
+1. **direct closure** when installation is simple and closure capture is already the honest binding form
+2. **specialized direct closure** for the common hot case when direct specialization is still enough
+3. **template → bytecode blob → load + bind** as the default explicit structural realization path when artifact identity, binding schema, or install caching deserve their own layer
+4. **source kernel via `load` / `loadstring`** when exact LuaJIT trace shape, unrolling, or authored low-level execution structure is itself the honest realization artifact
+5. **explicit install/artifact framework** when the backend really needs named catalogs, install keys, multiple artifact families, or richer realization structure
+
+These are backend realization choices for the same canonical machine. They are not five different architectures.
+
+So the practical rule is: closures are the default **direct** Lua realization path; template → blob → bind is the default **explicit structural** Lua realization path; source kernels via `load` / `loadstring` are the deliberate **manual code-shape** Lua realization path. Author templates as real Lua when structure should be restored and rebound; use source kernels when exact trace-shaped code is the point.
+
+### 9.7 Structural Lua realization policy
+
+When Lua realization is explicit rather than direct, the key rule is simple:
+
+> **lower hard, then choose the honest explicit artifact form: template/blob/bind or source kernel.**
+
+That means:
+
+- author templates as real Lua functions when execution shape should be restored from bytecode
+- use source kernels when exact trace-friendly LuaJIT code shape is itself the artifact being installed
+- choose either form only from already-lowered machine plans
+- use `string.dump` to make bytecode the normal artifact form for template-based realization
+- use `load(blob)` to restore template execution shape at installation time
+- use an explicit binding schema plus `debug.setupvalue` to inject compiled payload in bytecode-binding paths
+- separate template or kernel-family identity from artifact identity when install caching matters
+- bind larger data instead of constantly re-emitting shape when the bytecode-template path is used
+- cache by machine shape when possible and by concrete artifact identity when necessary
+
+If the Lua installer is still doing semantic work, the phase above it is wrong. A good Lua proto layer should mostly choose among fixed templates or known source-kernel families, restore or load artifacts, apply explicit bindings where needed, and install already-decided control structure.
+
+If bytecode installation depends on fragile unnamed upvalues, the realization model is still too implicit. If source generation is rediscovering semantics instead of expressing a known low-level kernel family, the backend policy is wrong even if the code still runs fast.
+
+### 9.8 What makes Terra special
 
 Terra becomes the opt-in strong backend when you need what only Terra gives clearly and reliably:
 
-**Explicit staging.** In Terra, the separation between compiler-side logic, generated code, and runtime execution is concrete and programmable. You can literally emit specific branch structures, inline known choices, and specialize paths — not by shaping code and hoping the JIT notices, but by authoring the generated machine directly.
+**Explicit staging.** In Terra, the separation between compiler-side logic, generated code, realization, and runtime execution is concrete and programmable.
 
-**Static native types.** A Terra Unit can own a native function with a concrete signature, a native state_t with exact fields, explicit pointer-level access patterns, and concrete data layout known at compile time.
+**Static native types.** A Terra machine or Unit can own a native function with a concrete signature and an exact native state layout.
 
-**Struct synthesis in compose.** Because child state layouts are native types, `Unit.compose` can synthesize larger native state layouts structurally — one explicit composite struct reflecting the containment hierarchy.
+**Struct synthesis in compose.** Because child state layouts are native types, composition can synthesize larger native state layouts structurally.
 
 **ABI control.** When the integration boundary demands a specific calling convention or data layout, Terra provides it directly.
 
-**LLVM optimization.** Constants baked into code, dead code elimination, instruction selection, vectorization potential — LLVM continues simplifying from where the terminal left off.
+**LLVM optimization.** Constants baked into code, dead code elimination, instruction selection, vectorization potential — LLVM continues simplifying from where the terminal and realization stages leave off.
 
-### 9.7 Terra as design pressure
+### 9.9 Terra as design pressure
 
 One subtle but important point: Terra matters for more than raw speed.
 
-Terra also acts as design pressure. Because it forces explicitness in type layout, staging boundaries, state ownership, machine shape, and compilation granularity, it often reveals missing phases, vague source models, coarse recompilation boundaries, and unclear authored/runtime splits.
+Terra also acts as design pressure. Because it forces explicitness in type layout, staging boundaries, realization boundaries, state ownership, machine shape, and compilation granularity, it often reveals missing phases, vague source models, coarse recompilation boundaries, and unclear authored/runtime splits.
 
 A good mental model is:
 
@@ -2258,48 +3969,75 @@ A good mental model is:
 
 Once the LuaJIT backend is constrained correctly, a second statement also becomes true:
 
-> strict LuaJIT can impose almost the same architectural pressure, because the leaf must still end as `Unit { fn, state_t }` over typed backend-native layout.
+> strict LuaJIT — whether realized as specialized closures, bytecode-template artifacts, or explicit install catalogs — can impose almost the same architectural pressure, because the machine and proto layers still have to end in a narrow installed runtime form.
 
 The difference is that Terra provides stronger mechanical enforcement through explicit native staging, while LuaJIT provides the same pressure only if the backend rules are kept strict.
 
-### 9.8 When to opt into Terra
+### 9.10 When to opt into Terra
 
 Terra is especially worthwhile when:
 - explicit staging control matters more than build speed
 - exact struct layout and ABI compatibility are required
-- LLVM can materially outperform the host JIT for this kernel family
+- LLVM can materially outperform the host JIT for this machine family
 - the workload is heavy enough that LLVM compile cost is repaid by runtime throughput
 - native interop requires direct low-level expression
 
-### 9.9 A practical opt-in policy
+### 9.11 A practical policy
 
 1. Design the domain backend-neutrally
 2. Design leaves with Terra-level explicitness in mind
-3. Implement the shared pure layer once
-4. Target LuaJIT first on JIT-native platforms
-5. Benchmark the important leaf families and compositions
-6. Opt into Terra where explicit native power buys enough
+3. Make the canonical machine explicit
+4. Decide whether the proto stays thin or deserves richer structure
+5. Implement the shared pure layer once
+6. Target LuaJIT first on JIT-native platforms when iteration cost matters
+7. Benchmark important machine and realization families separately
+8. Opt into Terra where explicit native power buys enough
+
+A stronger restatement is:
+
+> backend-neutral architecture means source language, phase meaning, and machine design stay stable while realization policy varies below them.
 
 ---
 
 ## Part 10: Performance Model
 
-### 10.1 Performance is not just steady-state throughput
+### 10.1 Performance has three costs, not one
 
-Because this architecture is built around a live compile loop, performance must be understood across two dimensions:
+Because this architecture is built around a live compile loop, performance must be understood across **three** costs:
 
-1. **Rebuild cost** — how expensive it is to rebuild the machine when the source changes
-2. **Run cost** — how efficiently the rebuilt machine runs once installed
+1. **semantic rebuild cost** — the cost of recomputing source-driven meaning
+2. **realization cost** — the cost of turning machine meaning into installed artifacts
+3. **runtime cost** — the cost of executing the installed result
 
-Both matter. A backend that produces brilliant machine code but is very expensive to rebuild may be the wrong default for interactive workloads. A backend that rebuilds instantly but executes too slowly may also be wrong.
+That is the modern performance model of the pattern.
+
+The old two-way split of “rebuild cost” and “run cost” was helpful, but too coarse now that realization is explicit. In many systems the dominant question is not just:
+
+- how expensive is recompilation?
+- how fast is execution?
+
+but also:
+
+- how expensive is realization and installation for this backend policy?
+
+A backend may have:
+- cheap semantic compilation but expensive realization
+- cheap realization but expensive runtime
+- excellent runtime but too much install cost for interactive edits
+
+You need to see all three.
 
 ### 10.2 The first performance question is architectural
 
-In this pattern, the first useful performance question is often not "what function is hot?" but rather:
+In this pattern, the first useful performance question is often not:
 
-> why did this change require this amount of recompilation?
+> what function is hot?
 
-That question immediately points toward the actual architecture:
+but rather:
+
+> why did this change require this amount of semantic recomputation, realization work, and installation work?
+
+That question immediately points toward architecture:
 
 - Did Apply fail to preserve structural sharing?
 - Are identity boundaries too coarse?
@@ -2307,91 +4045,262 @@ That question immediately points toward the actual architecture:
 - Is a transition doing too much work over too much structure?
 - Is a terminal compiling too large a region at once?
 - Did a later phase flatten away locality too early?
+- Did realization become too bespoke per tiny change?
+- Is the install boundary too coarse?
 
-These are architectural issues, not micro-optimization issues. Performance debugging often becomes a question about model boundaries and phase clarity rather than about scattered runtime heuristics.
+These are architectural issues, not micro-optimization issues. Performance debugging often becomes a question about model boundaries, phase clarity, machine shape, and realization policy rather than about scattered runtime heuristics.
 
-### 10.3 Rebuild cost
+### 10.3 Semantic rebuild cost
 
-Rebuild cost is paid when the source program changes. It includes:
+Semantic rebuild cost is paid when the source program changes and the compiler must re-derive meaning.
+
+It includes:
 
 - reducer work
 - structural allocation of changed nodes
 - transition recomputation
-- terminal recomputation
-- backend-specific Unit construction
-- installation or hot swap of the new compiled artifact
+- Machine IR recomputation
+- terminal / machine recomputation
 
-In interactive systems, rebuild cost is part of the user experience. Every keystroke, every parameter tweak, every node move potentially triggers a rebuild. Rebuild latency affects responsiveness, live feel, and confidence that the system is truly incremental.
+In interactive systems, this cost is part of the user experience. Every keystroke, parameter tweak, node move, rule edit, or drag may trigger semantic rebuild work. This affects responsiveness, live feel, and confidence that the system is truly incremental.
 
-This is why cheap terminal construction matters so much. LuaJIT wins an enormous amount on rebuild cost — producing specialized closures and FFI state layouts is dramatically cheaper than an explicit LLVM-backed path.
+The right question here is:
 
-### 10.4 Run cost
+> how much semantic work did this edit force, and why?
 
-Run cost is the cost of the installed machine while executing: callback throughput, draw loop throughput, state access cost, arithmetic cost, memory locality in the hot path.
+If a tiny local edit causes broad semantic misses, the source ASDL, phase boundaries, or structural sharing rules are wrong.
 
-If the installed machine is too slow, the architecture still fails. Audio callbacks at 44.1kHz, 60fps rendering, and low-latency simulation all impose hard run-cost constraints.
+### 10.4 Realization cost
 
-### 10.5 The bake/live split
+Realization cost is the cost of taking already-derived machine meaning and turning it into installable backend artifacts.
 
-One of the most useful performance questions at the terminal boundary is:
+It may include:
 
-> what should shape `gen`, what should remain stable in `param`, and what should remain mutable in `state_t`?
+- machine → direct-closure realization
+- template selection
+- bytecode generation or restoration
+- artifact planning
+- installation metadata assembly
+- binding schema / binding payload assembly
+- `load(blob)` / `debug.setupvalue` / native compile overhead
+- artifact cache lookup or population
+- hot-swap / install work
+
+This cost is often paid on every meaningful semantic miss, but it is conceptually distinct from semantic rebuilding.
+
+That distinction matters because realization cost is controlled by different design choices:
+
+- whether the proto language is thin or rich
+- how large the realizable unit is
+- whether shape identity is separated from artifact identity
+- whether template families stay small, regular, and reusable
+- how much payload is inlined versus bound
+- how much install work is repeated unnecessarily
+
+A good proto framework can reduce both latency and conceptual mess by making artifact work explicit and cacheable.
+
+### 10.5 Runtime cost
+
+Runtime cost is the cost of executing the installed machine or artifact:
+- callback throughput
+- draw loop throughput
+- parser throughput
+- state access cost
+- arithmetic cost
+- memory locality in the hot path
+- branch predictability / trace friendliness / machine-code quality
+
+If the installed machine is too slow, the architecture still fails. Audio callbacks, 60fps rendering, low-latency simulation, or high-volume parsing all impose real runtime constraints.
+
+### 10.6 Why the three costs trade off
+
+These three costs interact.
+
+Examples:
+
+- A backend that produces brilliant native code may have excellent runtime cost but poor realization cost.
+- A tiny direct closure realization may have excellent realization cost but weaker runtime cost for certain machine families.
+- A bytecode-artifact framework may improve runtime cost and install reuse while increasing one-time realization complexity.
+- Over-specializing template families or binding too much shape into the artifact may improve runtime but hurt realization reuse and inflate install cost.
+
+So performance work is usually not “make one number smaller.” It is:
+
+> choose the right tradeoff between semantic rebuild, realization, and runtime for the actual edit/run profile of the system.
+
+### 10.7 The bake / bind / live split
+
+One of the most useful lower-boundary performance questions is now:
+
+> what should shape `gen`, what should remain stable in `param`, what should remain mutable in `state`, and what should be carried as realization artifact payload rather than repeatedly emitted?
+
+A good lower split is no longer only bake/live. It is:
+
+- **bake into the machine**
+- **bind as stable machine/realization payload**
+- **keep live in state**
 
 **Bake into the machine when:**
 - the fact is compile-time-known for the subtree
 - removing the variability simplifies control flow materially
-- constant propagation or specialization will help
-- it reduces repeated branching in the hot path
+- specialization will help
+- it removes repeated branching in the hot path
 
-Examples: fixed operator kind, fixed blend mode, known channel count, resolved shadow kind, known filter topology.
+Examples:
+- fixed operator kind
+- fixed blend mode
+- known channel count
+- known parser branch shape
+- resolved filter topology
 
-**Keep live in state_t when:**
+**Bind as stable payload when:**
+- the data is stable for this machine/artifact instance
+- it is too large or too variable to inline repeatedly
+- shape reuse matters more than embedding every constant
+- realization artifacts should stay small and regular
+
+Examples:
+- larger tables
+- constructor refs
+- first-set data
+- binding payloads
+- install metadata
+- shared helper references
+
+**Keep live in state when:**
 - the value is execution-time mutable
-- the value changes frequently without requiring semantic recompilation
+- it changes frequently without requiring semantic recompilation
 - the machine genuinely needs runtime ownership of it
 - rebuilding for every tiny change would be the wrong tradeoff
 
-Examples: filter delay history, counters, mutable buffers, smoothing state, backend-owned handles.
+Examples:
+- filter delay history
+- counters
+- mutable buffers
+- smoothing state
+- backend-owned handles
+- scrolling offsets
+- simulation accumulators
 
-The right bake/live split often determines whether a leaf feels compiled or still half interpreted.
+The right bake / bind / live split often determines whether a system feels compiled or still half interpreted.
 
-### 10.6 Narrowing sum types early helps both costs
+### 10.8 Narrowing sum types early helps all three costs
 
-A wide sum type reaching the hot path hurts run cost (the machine keeps branching on semantic alternatives) and hurts rebuild cost (terminals become more complex when they must interpret broad authored structure). That is why later phases should narrow rather than widen. A good terminal input should be much more monomorphic than the authored source.
+A wide sum type reaching too far downward hurts:
 
-### 10.7 Locality is performance
+- **semantic rebuild cost** because terminals and proto layers become more complex
+- **realization cost** because artifact generation must still interpret broad authored structure
+- **runtime cost** because the machine keeps branching on semantic alternatives
 
-If the source model and phases preserve locality well, then small edits change small subtrees, memoization hits stay high, terminals re-run only where necessary, and installation work stays smaller. If locality is poor, performance suffers before any low-level arithmetic question even arises.
+That is why later semantic phases should narrow rather than widen. A good terminal input should be much more monomorphic than the authored source, and a good proto layer should receive already-decided structure rather than rediscovering meaning.
 
-This is why stable IDs, honest containment, and structural sharing are so central to the architecture's performance story.
+### 10.9 Locality is performance
 
-### 10.8 The recursive benchmarking law
+If source modeling, phases, machine design, and realization boundaries preserve locality well, then:
+- small edits change small subtrees
+- semantic rebuild stays local
+- realization work stays local
+- artifact caches stay useful
+- runtime installation work stays smaller
 
-Once a lower machine is trusted, the next slow boundary points upward into the language and phase design above it. The biggest performance wins often come first from better source modeling, better identity boundaries, narrower phases, better Unit granularity, and better bake/live decisions — and only after those are right do low-level backend optimizations pay their full value.
+If locality is poor, performance suffers before any low-level arithmetic question even arises.
 
-A poor source model can waste more performance than a clever arithmetic trick can recover. A missing phase can cost more than a backend micro-optimization can save. A bad Unit boundary can dominate everything downstream.
+This is why stable IDs, honest containment, structural sharing, truthful memo boundaries, and sensible realizable-unit boundaries are central to the architecture's performance story.
 
-### 10.9 The memoize-hit-ratio test
+### 10.10 Semantic reuse and realization reuse are separate metrics
 
-There is also a highly practical metric that sits between modeling and performance:
+There are at least two reuse questions worth measuring:
 
-> **the memoize hit ratio at real stage boundaries**
+1. **semantic memo reuse** — how often transitions and terminals hit the cache
+2. **realization reuse** — how often machine shape, artifact shape, or install artifacts are reused
+
+A system can have good semantic reuse but poor realization reuse if:
+- shape keys are unstable
+- emitted code inlines too much volatile payload
+- install keys are too specific
+- realization boundaries are too coarse or too fine
+
+Likewise, a system can have decent realization reuse but poor semantic reuse if the source ASDL or phase design is wrong.
+
+So when measuring incrementality, ask both:
+- how many semantic boundaries missed?
+- how many realization boundaries or artifact constructions missed?
+
+### 10.11 The memoize-hit-ratio test
+
+There is a highly practical metric that sits between modeling and performance:
+
+> **the memoize hit ratio at real semantic stage boundaries**
 
 This metric measures the architecture more directly than raw throughput does. If one small edit causes a few local misses and many sibling hits, the decomposition is healthy. If one small edit causes misses across unrelated leaves and widespread recompilation, the ASDL or phase boundaries are wrong.
 
-Instrumentation through `U.memo_report()`, `U.memo_measure_edit()`, and `U.memo_quality()` makes this observable. The hit ratio is the design-quality metric for incremental compilation.
+Instrumentation through `U.memo_report()`, `U.memo_measure_edit()`, and `U.memo_quality()` makes this observable. The hit ratio is the design-quality metric for incremental semantic compilation.
 
 - **90%+ reuse** — decomposition is excellent
 - **70–90% reuse** — healthy but worth inspecting
 - **below 50% reuse** — the ASDL or phase boundaries are too coarse, structural sharing is broken, or keys are unstable
 
-### 10.10 Backend-specific performance questions
+But now add a second practical question:
 
-**LuaJIT-oriented:** Are the emitted closures monomorphic enough to trace well? Are important constants captured in upvalues? Is state access stable and cheap via FFI? Are loops and composition shapes simple enough for the JIT?
+> after the semantic misses, how much realization work was actually repeated?
 
-**Terra-oriented:** Are we staging the right facts into emitted code? Is the native state layout as explicit and local as it should be? Are we paying LLVM cost at the right granularity? Is the compile tax worthwhile with sufficient steady-state benefit?
+That is often the difference between a merely correct system and a truly interactive one.
 
-Different questions, same architectural frame.
+### 10.12 The recursive benchmarking law
+
+Once one lower layer is trusted, the next slow boundary points upward.
+
+- If runtime is slow, inspect machine shape.
+- If realization is slow, inspect artifact shape and install policy.
+- If semantic rebuild is slow, inspect source modeling and phase design.
+
+The biggest wins often come first from:
+- better source modeling
+- better identity boundaries
+- narrower phases
+- cleaner machine inputs
+- better realizable-unit boundaries
+- better bake / bind / live decisions
+
+Only after those are right do low-level backend optimizations pay their full value.
+
+A poor source model can waste more performance than a clever arithmetic trick can recover. A missing phase can cost more than a backend micro-optimization can save. A bad realization boundary can dominate interactivity even if the final machine runs fast.
+
+### 10.13 Backend-specific performance questions
+
+**Semantic-layer questions:**
+- Did this edit preserve structural sharing?
+- Are phase boundaries scoped correctly?
+- Is Machine IR too broad or too bespoke?
+- Are sum types consumed early enough?
+
+**LuaJIT / Lua realization questions:**
+- Are specialized closures monomorphic enough to trace well?
+- If emitting Lua, is the generated source tiny, regular, and reused by shape?
+- Are emit time, load time, and run time measured separately?
+- Are important constants bound instead of bloating source?
+- Is state access stable and cheap via FFI?
+- Are artifact keys and shape keys truthful?
+- Is install work repeated unnecessarily?
+
+**Terra questions:**
+- Are we staging the right facts into emitted code?
+- Is the native state layout as explicit and local as it should be?
+- Are we paying LLVM cost at the right granularity?
+- Is the compile tax worthwhile with sufficient steady-state benefit?
+
+Different backends, same architectural frame.
+
+### 10.14 The practical rule
+
+A good performance diagnosis in this pattern usually asks, in order:
+
+1. is the source/phase design forcing too much semantic rebuild?
+2. is the realization policy forcing too much artifact work?
+3. is the installed machine too slow at runtime?
+
+That order matters.
+
+If you reverse it, you may spend a long time optimizing a hot path whose real problem was a bad ASDL, a missing phase, or an over-bespoke realization strategy.
 
 ---
 
@@ -2399,51 +4308,157 @@ Different questions, same architectural frame.
 
 The pattern does not eliminate complexity by pretending complex programs are simple. It eliminates infrastructure by removing the architectural conditions that made so much coordinating machinery necessary in the first place.
 
-In many conventional designs, a large amount of system complexity exists because the architecture has multiple overlapping partial truths — a runtime object graph, a store or model layer, a rendering layer with its own derived structures, caches remembering what changed, invalidation rules tracking who depends on whom, controller/service logic that reinterprets the same domain repeatedly. When those partial truths drift, the system needs more machinery to reconcile them.
+In many conventional designs, a large amount of system complexity exists because the architecture has multiple overlapping partial truths:
+- a runtime object graph
+- a store or model layer
+- a rendering layer with its own derived structures
+- caches remembering what changed
+- invalidation rules tracking who depends on whom
+- installer logic with its own hidden artifact model
+- controller/service logic that reinterprets the same domain repeatedly
 
-The compiler pattern reduces that need because the source program is explicit, interaction is explicit, phase boundaries are explicit, compiled artifacts are explicit, state ownership is explicit, and recompilation is driven structurally rather than by ad hoc invalidation protocols.
+When those partial truths drift, the system needs more machinery to reconcile them.
+
+The compiler pattern reduces that need because the source program is explicit, interaction is explicit, phase boundaries are explicit, machine meaning is explicit, realization is explicit where needed, installed artifacts are explicit, state ownership is explicit, and recompilation is driven structurally rather than by ad hoc invalidation protocols.
 
 ### 11.1 State management frameworks
 
-Centralized stores that become shadow architectures, action/effect plumbing, observer-heavy propagation systems, elaborate consistency protocols between multiple runtime models. In the compiler pattern, the source ASDL is the authored program, Apply computes the next source ASDL, later phases derive what should run. The state is no longer architecturally mysterious. You do not need meta-infrastructure just to answer "what is the application right now?"
+Centralized stores that become shadow architectures, action/effect plumbing, observer-heavy propagation systems, elaborate consistency protocols between multiple runtime models.
+
+In the compiler pattern, the source ASDL is the authored program, Apply computes the next source ASDL, later phases derive what should run, and realization installs the resulting artifacts. The state is no longer architecturally mysterious. You do not need meta-infrastructure just to answer:
+
+> what is the application right now?
 
 ### 11.2 Invalidation frameworks
 
-Complex machinery to track what changed, what needs recomputation, what caches must be repaired. In this pattern, structural identity plus memoized boundaries handle it: unchanged nodes hit the cache, changed nodes miss it. Incrementality is not a second architecture bolted onto the first one.
+Complex machinery to track what changed, what needs recomputation, what caches must be repaired.
+
+In this pattern, structural identity plus memoized boundaries handle it: unchanged nodes hit the cache, changed nodes miss it. Incrementality is not a second architecture bolted onto the first one.
 
 ### 11.3 Observer buses and event-dispatch webs
 
-Listeners, subscriptions, bubbling systems, change-notification graphs. Much of this becomes unnecessary when inputs are modeled as Event ASDL, Apply is the explicit state transition, and later phases rederive consequences structurally. Instead of "notify everyone who might care and let them each mutate their corner," the story is: represent what happened explicitly, compute the next program, recompile the consequences.
+Listeners, subscriptions, bubbling systems, change-notification graphs.
+
+Much of this becomes unnecessary when inputs are modeled as Event ASDL, Apply is the explicit state transition, and later phases rederive consequences structurally. Instead of “notify everyone who might care and let them each mutate their corner,” the story is:
+- represent what happened explicitly
+- compute the next program
+- recompile the consequences
+- re-realize only the affected artifacts
 
 ### 11.4 Dependency-injection containers and service-locator architecture
 
-Global service access accumulates because key functions cannot get the information they need structurally from their inputs. Service containers, DI graphs, registries passed everywhere, context objects threaded through all operations. These are often symptoms that the source model or phase structure is underspecified — missing source fields, missing resolution phases, hidden cross-references. The better fix is architectural, not infrastructural.
+Global service access accumulates because key functions cannot get the information they need structurally from their inputs. Service containers, DI graphs, registries passed everywhere, context objects threaded through all operations.
+
+These are often symptoms that the source model, phase structure, or realization boundary is underspecified:
+- missing source fields
+- missing resolution phases
+- hidden cross-references
+- hidden install dependencies
+
+The better fix is architectural, not infrastructural.
 
 ### 11.5 Hand-built runtime interpretation layers
 
-Perhaps the biggest elimination: the accidental interpreter itself. Dynamic dispatch tables over variants, generic node walkers asking "what are you?" repeatedly, runtime graph traversals rediscovering semantic facts, renderer-style command systems that are really uncompiled authored trees, general callback routers deciding domain behavior on the fly. The compiler pattern consumes that uncertainty earlier. By the time execution runs, those questions should already have been answered.
+Perhaps the biggest elimination: the accidental interpreter itself.
 
-### 11.6 Redundant test scaffolding
+Examples:
+- dynamic dispatch tables over variants
+- generic node walkers asking “what are you?” repeatedly
+- runtime graph traversals rediscovering semantic facts
+- renderer-style command systems that are really uncompiled authored trees
+- callback routers deciding domain behavior on the fly
 
-Mocks for services, fake runtime environments, setup frameworks, elaborate fixtures standing in for global state. In the pure layer, tests reduce to: construct ASDL input, call function, assert output. When such tests become difficult, something hidden is leaking into the supposedly pure layer.
+The compiler pattern consumes that uncertainty earlier. By the time execution runs, those questions should already have been answered.
 
-### 11.7 Redundant runtime ownership machinery
+### 11.6 Accidental realization interpreters
 
-External state registries, independent lifecycle managers for compiled children, detached runtime objects mirroring compiled structure. Because Units pair behavior with owned runtime state, lifecycle concerns are more often represented structurally by the Unit composition itself rather than by a second architecture.
+There is now a second version of the same mistake lower down.
 
-### 11.8 The general principle
+Even if source semantics were compiled correctly, the backend can regress by turning realization into another hidden interpreter.
+
+Examples:
+- generic installer bags that rediscover artifact meaning dynamically
+- emitted-source builders that still branch on broad semantic variants
+- install-time string routers deciding what machine shape something “really” is
+- bytecode/source/closure logic scattered across ad hoc conditionals instead of one explicit proto layer
+- artifact payloads that are opaque bags because no honest proto nouns were modeled
+
+This is the **accidental realization interpreter**.
+
+The fix is the same kind of fix as for accidental runtime interpreters:
+- define the missing proto nouns
+- make artifact identity explicit
+- lower semantics earlier
+- keep realization structural and regular
+
+### 11.7 Ad hoc artifact caches and installer glue
+
+Without an explicit realization model, systems often grow:
+- hand-rolled code caches
+- one-off bytecode registries
+- installer maps keyed by mysterious strings
+- closure caches with unclear invalidation rules
+- hidden load/bind helpers spread across the codebase
+
+These are often symptoms that artifact identity, shape identity, or install boundaries were real architectural concerns but were never modeled honestly.
+
+A proto framework eliminates much of this glue by making those concerns explicit:
+- shape key
+- artifact key
+- install mode
+- binding schema / binding payload
+- install catalog
+- reusable template/blob families
+
+### 11.8 Redundant test scaffolding
+
+Mocks for services, fake runtime environments, setup frameworks, elaborate fixtures standing in for global state.
+
+In the pure layer, tests reduce to: construct ASDL input, call function, assert output.
+
+In the proto layer, tests can often reduce to: construct machine or proto input, lower/install it, assert artifact form or callable behavior.
+
+When such tests become difficult, something hidden is leaking into the supposedly explicit architecture.
+
+### 11.9 Redundant runtime ownership machinery
+
+External state registries, independent lifecycle managers for compiled children, detached runtime objects mirroring compiled structure.
+
+Because Units pair behavior with owned runtime state, and because realization can make installation and artifact ownership explicit, lifecycle concerns are more often represented structurally rather than by a second shadow architecture.
+
+### 11.10 The general principle
 
 > The pattern eliminates glue whose only job was to reconnect truths that should never have been split apart.
 
-If authored truth and semantic truth are explicitly connected by transitions, less glue. If compiled behavior and state ownership are one Unit, less glue. If change propagation is handled by identity plus memoization, less glue. If interaction is an explicit Event language, less glue.
+If authored truth and semantic truth are explicitly connected by transitions, less glue.
+If machine meaning and installation are explicitly connected by realization, less glue.
+If compiled behavior and state ownership are one Unit, less glue.
+If change propagation is handled by identity plus memoization, less glue.
+If interaction is an explicit Event language, less glue.
 
-### 11.9 What does not disappear
+### 11.11 What does not disappear
 
-The pattern does not eliminate: the need for careful domain modeling, backend engineering, integration with drivers/OS/graphics/audio, operational error handling, performance work, or judgment about phase design and Unit granularity. It moves complexity to places where it is more explicit, more local, and more meaningful.
+The pattern does not eliminate:
+- the need for careful domain modeling
+- backend engineering
+- realization design
+- integration with drivers / OS / graphics / audio
+- operational error handling
+- performance work
+- judgment about phase design, realization boundaries, and Unit granularity
 
-### 11.10 A warning against reintroducing the eliminated machinery
+It moves complexity to places where it is more explicit, more local, and more meaningful.
 
-Once the pattern starts simplifying a codebase, there is a temptation to reintroduce the old furniture by habit: adding a state manager where the source ASDL should suffice, adding an observer bus where Event ASDL + Apply should suffice, adding invalidation flags where identity + memoize should suffice, adding a service container where a resolution phase should suffice, adding runtime registries where Unit composition should suffice.
+### 11.12 A warning against reintroducing the eliminated machinery
+
+Once the pattern starts simplifying a codebase, there is a temptation to reintroduce the old furniture by habit:
+- adding a state manager where the source ASDL should suffice
+- adding an observer bus where Event ASDL + Apply should suffice
+- adding invalidation flags where identity + memoize should suffice
+- adding a service container where a resolution phase should suffice
+- adding runtime registries where Unit composition should suffice
+- adding ad hoc installer caches where proto nouns should suffice
+- adding hidden backend glue where an explicit proto layer should exist
 
 Sometimes these tools are genuinely needed at specific backend boundaries. But they should be treated as exceptions that require justification, not as default architecture.
 
@@ -2519,6 +4534,9 @@ module Editor {
 - Search/replace: new Line nodes for affected lines only → 3 replacements in 10,000 lines recompiles 3 lines
 - Parallelism: independent Blocks compile in parallel — the ASDL tree is the execution plan
 
+**Realization note**:
+A text editor often uses a thin proto path from laid/batched text plans to installed render Units. But if the backend grows honest install nouns — glyph-atlas artifacts, cached emitted text kernels, exportable formatting packages — then the proto language becomes richer. The source language is still document/block/span; the proto language simply expands when installation itself needs more structure.
+
 ### 12.2 Spreadsheet
 
 **Sum types**:
@@ -2552,6 +4570,9 @@ Compiled:     Unit that renders the grid to GPU
 - Parallel evaluation: independent subgraphs of the dependency DAG evaluate in parallel, no scheduler needed
 - Charts as second terminal: same cell data → chart rendering pipeline, memoized independently, change a cell → chart recompiles incrementally
 
+**Realization note**:
+Many spreadsheet workloads use a thin proto path: machine meaning becomes an installed evaluator or renderer with very little extra proto structure. But if formulas are packaged for deployment, sandboxing, persistence, remote execution, or cached bytecode-template artifacts, then the proto language becomes richer below the evaluator machine. Again, that does not change the source nouns: sheet, cell, formula remain the domain language.
+
 ### 12.3 Drawing / vector graphics app
 
 **Sum types**:
@@ -2580,6 +4601,9 @@ Compiled:   Unit that renders to GPU
 - Group transforms: move group → children are same ASDL nodes → children cached, only group shell recompiles
 - Export to multiple formats: SVG, PDF, PNG are different terminal boundaries from the same ASDL → target is a memoize key
 - Zoom/pan: viewport-independent shape compilation + viewport-dependent projection → zoom is a cache hit on all shapes
+
+**Realization note**:
+Vector and drawing systems often split here. On-screen rendering may use a thin proto path to draw Units, while export/build paths may honestly want richer artifact languages: SVG documents, PDF object graphs, cached shader/material packages, or installable export jobs. This is a good example of one source language feeding both thin proto realization and richer structured artifact realization.
 
 ### 12.4 Game / simulation
 
@@ -2614,6 +4638,161 @@ This is a subtlety: not everything can be baked. Per-frame-changing values (phys
 - Prefab instancing: 100 references to the same ASDL subtree → memoize compiles once, change the prefab → one recompilation updates all instances
 - Parallelism: independent entities compile in parallel, independent render buckets compile in parallel
 
+**Realization note**:
+Games and simulations commonly use both styles at once. Physics stepping may use a thin proto path to installed machines. Rendering may partly stay thin and partly expand through richer artifact layers such as shader packages, cooked material variants, asset bundles, or installable script kernels. The important rule is the same: entity/collider/material are source nouns; package/bundle/kernel/blob are proto nouns.
+
+### 12.5 Parser frontend plus proto compiler
+
+This example shows the full modern story:
+- a **domain compiler** for parser meaning
+- followed by a **proto compiler** for installable artifacts
+
+#### Domain nouns
+
+At the parser domain level, the honest nouns are:
+- grammar
+- token
+- rule
+- constructor
+- product
+
+Not:
+- proto
+- chunk name
+- bytecode blob
+- install catalog
+
+Those later nouns may become correct at realization time, but they are not the parser author's source language.
+
+#### Source ASDL
+
+```asdl
+FrontendSource.Spec = (
+    Grammar grammar,
+    Constructor* constructors,
+    Product* products
+) unique
+
+FrontendSource.Grammar = (
+    Token* tokens,
+    Rule* rules,
+    SkipRule* skips
+) unique
+
+FrontendSource.Token = (
+    number id,
+    string name,
+    TokenKind kind
+) unique
+
+FrontendSource.Rule = (
+    number id,
+    string name,
+    Expr expr,
+    Result result
+) unique
+```
+
+For JSON, the user-facing rule vocabulary might include:
+- `value`
+- `object`
+- `array`
+- `string`
+- `number`
+- `members`
+- `elements`
+
+That is the honest domain language.
+
+#### Domain phases
+
+```text
+FrontendSource
+    ↓ check
+FrontendChecked
+    ↓ lower
+FrontendLowered
+    ↓ define_machine
+FrontendMachine
+```
+
+These phases consume real semantic decisions:
+- names become validated IDs
+- token and rule refs become resolved headers
+- grammar expressions become machine-feeding parser plans
+- canonical parse/token machines become explicit
+
+At this point, the semantic compiler has done its job. We know what parser machine should exist.
+
+#### Realization phases
+
+Now the second compiler begins.
+
+For a Lua-oriented backend, the honest proto nouns might be:
+- proto
+- binding plan
+- artifact family
+- chunk name
+- shape key
+- artifact key
+- source artifact
+- closure artifact
+- bytecode artifact
+
+So the backend may continue like this:
+
+```text
+FrontendMachine
+    ↓ prepare_realization
+CrochetRealizeSource / ProtoCatalog
+    ↓ check_realize
+CrochetRealizeChecked
+    ↓ lower_realize
+CrochetRealizePlan
+    ↓ prepare_install
+CrochetRealizeLua
+    ↓ install
+artifact catalog / Unit / installed parser entry
+```
+
+The exact names may vary, but the architecture is the same.
+
+#### Why this split is good
+
+It keeps the two languages honest.
+
+The parser author edits:
+- tokens
+- rules
+- products
+
+The proto layer handles:
+- emitted parser kernels
+- binding order
+- source vs closure vs bytecode policy
+- install keys and caches
+- backend artifact installation
+
+That means:
+- grammar meaning stays out of the install layer
+- install concerns stay out of the source grammar ASDL
+- bytecode is an artifact, not the source of truth
+- artifact identity can be modeled explicitly
+- emitted Lua can stay tiny and regular because semantic work already happened upstream
+
+#### What falls out of this modeling
+
+- You can change the JSON grammar and recompile only the affected rules and parser artifacts.
+- You can keep one realization policy for cold tools and another for hot ones without redesigning the grammar language.
+- You can cache by machine shape separately from bound payload where useful.
+- You can compare direct closure realization against emitted-source or bytecode realization as backend policy choices over the same machine.
+- You avoid the common trap where the parser source language gets polluted with backend artifact concerns.
+
+This is the clean relationship between a domain compiler and a proto compiler:
+
+> the grammar language says what parser should exist;
+> the proto language says how that parser machine should be installed.
+
 ---
 
 ## Part 13: What You Can Build
@@ -2622,47 +4801,71 @@ The pattern is applicable anywhere the user is editing a structured program in s
 
 The general rule: a good domain for this pattern has structured persistent domain objects with meaningful identity and relationships, interaction that changes the authored program over time, later computation that depends on derived semantic decisions, a final runtime workload that benefits from specialization, and where repeated interpretation of the full domain structure would be wasteful or architecturally messy.
 
+All of those domains cross a proto boundary. In some, the proto stays thin. In others, the proto language becomes richer because installation itself has honest nouns: artifact family, template family, install key, bound payload, package, bundle, bytecode, export job. The source-domain fit and the proto-layer fit are related, but they are not the same question.
+
+In every case, though, the seventh concept is still proto language. Only its richness changes.
+
 ### 13.1 Audio tools and synthesizers
 
 Audio is one of the clearest fits. The domain naturally has explicit user-authored structure, graph or chain composition, stable identities for devices/clips/nodes/parameters, derived semantic phases (resolution, scheduling, coefficient computation), and a hot execution path where repeated interpretation is undesirable. Synth graphs, effects chains, modular routing, sequencers, DAWs, live performance tools.
+
+The proto layer is often thin for hot DSP kernels, but may become richer for plugin wrappers, export artifacts, preset/package formats, or cached generated kernels.
 
 ### 13.2 Text editors and structured editors
 
 A serious editor contains rich structure: documents, blocks, spans, cursors, selections, marks, style rules, folding state. Events edit that structure: insert, delete, move cursor, change selection, apply formatting. Later phases resolve styles, shape text, compute line layout, derive paint-ready runs, produce hit-test structures. The visual execution layer benefits from receiving something much narrower than the raw authored model. Especially compelling in structured editors where the source is richer than text.
 
+Most editor rendering paths use a thin proto path, but cached text kernels, export documents, or installable editor-extension artifacts may justify a richer proto layer.
+
 ### 13.3 UI systems and retained declarative interfaces
 
 A retained UI tree is already very close to a source program. It contains nodes, layout declarations, visual style, content, interaction bindings, view state. Events edit it, phases resolve styles/bindings, compute layout, flatten paint operations, produce draw/hit-test Units. The same architecture that drives an audio compiler drives a UI compiler — different source vocabulary, same compilation story.
+
+UI often uses a thin proto path to render/hit-test Units, but style packages, emitted widget kernels, theme bundles, or installable component artifacts may justify a richer proto language.
 
 ### 13.4 Spreadsheets and notebooks
 
 Sheets, cells, formulas, charts, formatting rules. Formulas parse to expression trees, references validate into dependency graphs, evaluation IS compilation. The compiled spreadsheet doesn't interpret formulas — it runs a native function that produces all cell values. Notebooks extend this with richer cell types and execution semantics.
 
+Many spreadsheet engines use a thin proto path, but packaging formulas for persistence, remote execution, sandboxing, or reusable emitted evaluators can introduce a richer proto layer.
+
 ### 13.5 Drawing and scene editors
 
 Shapes with transforms, styles, layers. Transforms resolve to absolute, groups flatten, bounds compute, text shapes, draw calls sort by GPU efficiency. The same compilation pipeline as UI — different source vocabulary (artistic properties vs layout properties), same draw-call terminal.
+
+These tools often have both thin and rich proto paths: on-screen rendering may stay thin, while export paths, print paths, and asset-package paths may need richer artifact languages.
 
 ### 13.6 Protocol engines and structured communication
 
 If a system processes structured messages through semantic phases — validate, bind, classify, route, respond — it may fit the compiler shape. Source model may be session or protocol state, events are incoming messages, phases resolve and classify, terminals produce specialized handlers.
 
+Realization may stay direct for in-process handlers, or become explicit when handlers must be packaged, deployed, cached, serialized, or installed into another runtime.
+
 ### 13.7 Simulations and live-authored systems
 
 Scenario editors, physics setup tools, rule-based world configuration, interactive simulations with authored entities and behaviors. Source model contains entities, relationships, parameters, scenario structure. Later phases validate references, classify behavior families, derive execution schedules, compile step/query/render Units.
+
+A thin proto path is common for hot stepping paths, while richer proto layers become valuable for asset cooking, scenario packages, generated rule kernels, or deployable simulation bundles.
 
 ### 13.8 Multi-output tools
 
 Tools where the same source program feeds multiple outputs: execution, editor view, inspector/debugger, export/build artifacts. The architecture already assumes multiple memoized products from the same source. This is much cleaner than inventing several loosely synchronized models that each think they are the real app state.
 
+This is also where richer proto languages most often appear, because export/build/install artifacts become honest outputs in their own right rather than incidental side effects.
+
 ### 13.9 The applicability test
 
-The right question is not "is my domain like audio codegen?" The right question is:
+The right question is not "is my domain like audio compilation?" The right questions are:
 
 > is my user editing a structured program whose meaning I keep rediscovering at runtime, and would it be better to compile that meaning into narrower machines?
+>
+> and, below that, how thin or rich should the proto language be for this installation story?
 
 ### 13.10 What is a weaker fit
 
 The pattern is a weaker fit when there is little or no persistent authored structure, no meaningful phase boundaries, execution is inherently generic and does not benefit from specialization, the domain is mostly ad hoc dynamic scripting with little stable semantic structure, or the cost of modeling the source language exceeds the value of the resulting clarity.
+
+Likewise, a rich proto language is a weaker fit when installation has little honest structure beyond a thin machine-to-install path. If there are no real artifact nouns, no meaningful install identity, and no policy choices worth modeling, then the proto should stay thin rather than being inflated into a fake artifact language.
 
 ---
 
@@ -2757,27 +4960,41 @@ Before writing any implementation, answer these questions about your source ASDL
 □ If a boundary resists the canonical shape → fix the ASDL, not the code
 ```
 
-### 14.10 Compilation/execution split
+### 14.10 Compilation / realization / execution split
 ```
-□ Each function is either deciding what machine should exist or being the machine
+□ Each function lives at one honest level: compilation, realization, or execution
 □ Compilation-side code is pure, structural, memoized
+□ Realization-side code handles install/artifact concerns, not source semantics
 □ Functional helpers are treated as the authoring surface of the pure layer, not as the final runtime ontology
 □ Execution-side code is specialized, state-owning, operational
 □ No architecture-level reasoning happens in the execution layer
-□ Terminals are on the compilation side, even though they produce executable artifacts
+□ Terminals end semantic compilation even when APIs compress later realization steps
 ```
 
-### 14.11 Unit design
+### 14.11 Machine design
 ```
 □ Each terminal's semantic product is a machine, not merely an ad hoc function
-□ Each terminal produces a packaged Unit { fn, state_t }
-□ state_t contains only execution-time mutable data, not authored choices
-□ Bake/live split is explicit: compile-time-known → baked, runtime-mutable → state_t
-□ The canonical machine (gen/param/state) is clear before packaging as Unit
-□ Unit composition reflects source containment structure
+□ Bake/live split is explicit: compile-time-known → gen/param, runtime-mutable → state
+□ The canonical machine (gen/param/state) is clear before runtime packaging
+□ Machine shape is narrow enough that hot execution is not rediscovering semantics
+□ Parent/child machine composition reflects source containment where appropriate
 ```
 
-### 14.12 Machine IR (when applicable)
+### 14.12 Realization design
+```
+□ The proto language is explicit, even when it is thin
+□ It is explicit whether the proto language stays thin or expands into richer artifact structure
+□ If rich, the proto layer has honest nouns (proto, artifact, binding, install mode, key, blob, catalog)
+□ Proto nouns do not leak upward into the domain source ASDL
+□ Source-domain meaning does not get rediscovered inside proto code
+□ Artifact identity is explicit when shape identity and installed identity differ
+□ Bytecode / template artifacts / binding payload / source kernels are treated as artifacts, not source truth
+□ The install/cache boundary is a truthful memo boundary
+□ Template families and source-kernel families stay small and regular because semantics were already lowered upstream
+□ The proto footguns in §6.10 were checked explicitly
+```
+
+### 14.13 Machine IR (when applicable)
 ```
 □ Terminal input makes order, addressability, use-sites, resource identity, and state needs explicit
 □ The machine receives typed shapes, not generic wiring it must interpret
@@ -2785,7 +5002,7 @@ Before writing any implementation, answer these questions about your source ASDL
 □ If later branches need different aspects, facets carry orthogonal semantic planes
 ```
 
-### 14.13 View / UI
+### 14.14 View / UI
 ```
 □ View is a separate ASDL, projected from source
 □ View elements carry semantic refs back to source
@@ -2793,12 +5010,15 @@ Before writing any implementation, answer these questions about your source ASDL
 □ Errors flow from domain pipeline to View via semantic refs
 ```
 
-### 14.14 Implementation discovery (leaves-up)
+### 14.15 Implementation discovery (leaves-up)
 ```
 □ Started at leaf compilers, not at top-level pipeline
-□ Each leaf compiles as a clean structural transform — no reaching, no context args
+□ Each leaf first clarified the machine it wants
+□ Each leaf also clarified the smallest proto that would install that machine honestly
+□ It was made explicit whether the proto language is thin or rich
 □ Missing fields discovered by leaves were added to ASDL and propagated up
-□ Layers above were modified to provide what leaves demanded
+□ Layers above were modified to provide what leaves and proto demanded
+□ Proto richness was justified by the leaf rather than invented speculatively
 □ ASDL stabilized when leaves stopped demanding changes
 □ Design (top-down) and implementation (bottom-up) interleaved until convergence
 ```
@@ -2811,7 +5031,9 @@ Before writing any implementation, answer these questions about your source ASDL
 THE MODELING METHOD
 
 1. LIST THE NOUNS
-   Everything the user sees and names.
+   First ask whose language you are modeling.
+   Domain nouns for source ASDL; proto nouns for proto ASDL.
+   The proto language always exists architecturally, even when thin.
 
 2. FIND IDENTITY vs PROPERTY
    Identity nouns get IDs and become records.
@@ -2830,9 +5052,9 @@ THE MODELING METHOD
    These determine phase ordering.
 
 6. DEFINE THE PHASES
-   Each phase consumes decisions (eliminates sum types).
+   Each phase consumes decisions.
    Name the verb. If you can't name it, the phase shouldn't exist.
-   Terminal phase has zero sum types.
+   Lower semantic phases should narrow toward machine-friendly forms.
 
 7. TEST THE SOURCE ASDL
    Save/load, undo, completeness, minimality,
@@ -2851,22 +5073,29 @@ THE MODELING METHOD
 
 10. DESIGN THE VIEW PROJECTION
     Separate ASDL. Semantic refs back to source.
-    Own phase pipeline to GPU.
+    Own phase pipeline.
 
 11. IMPLEMENT LEAVES-UP
-    Start at the leaf compiler. Write the machine you want to install.
-    The leaf tells you what the ASDL must provide.
-    Fix the layer above. Recurse upward to the source ASDL.
-    Every boundary is a pure structural transform. If it resists — fix the ASDL.
+    Start at the leaf compiler. First make the machine explicit.
+    Then make the proto explicit: thin or rich, but always present.
+    The leaf tells you what the ASDL and proto layer must provide.
+    Fix the layer above. Recurse upward.
 
 12. CONVERGE
     Steps 1-10 give a top-down draft. Step 11 tests it bottom-up.
     The ASDL expands under profiler pressure, then collapses
-    as structural redundancy becomes visible (Part 8).
-    The ASDL stabilizes when leaves stop demanding changes.
+    as structural redundancy becomes visible.
+    The design stabilizes when leaves stop demanding changes.
 ```
 
-The hard part is steps 1-10. Step 11 is where the leaves either confirm the design is right or send you back to fix it. The direction is bottom-up: write the leaf you want to write, discover what it needs, modify each layer above to provide it, recurse to the source ASDL. Steps 1-10 tell you WHERE to look. Step 11 tells you WHAT to put there. When the ASDL is correct, every leaf is a natural pure structural transform and every phase transition is obvious. When it's not, the leaf resistance is the signal — and it arrives in 10 lines, not 500. The ASDL is the architecture. The leaves are the proof.
+The hard part is not merely writing code. It is keeping the languages honest:
+- source language for the domain
+- machine language for semantic execution
+- proto language for installation
+
+The seventh concept is that proto language. Realization is the machine → proto → installed movement through it.
+
+The leaves are the proof. They tell you whether the machine is honest, whether the proto is thin or rich, and whether the phases above them consumed enough knowledge. When the design is right, every leaf is a natural pure structural transform, every phase transition has one real verb, the proto language is explicit, and the installed artifact is exactly the one you wanted to run.
 
 ---
 
@@ -2885,33 +5114,48 @@ THE INPUT LANGUAGE
 STATE EVOLUTION
     Apply : (state, event) → state
 
-THE TWO LEVELS
-    compilation level decides the machine; execution level runs it
+THE SEVEN CONCEPTS
+    source ASDL
+    Event ASDL
+    Apply
+    transitions
+    terminals
+    proto language
+    Unit / installed artifact
+
+THE THREE LEVELS
+    compilation decides the machine
+    realization lowers machine → proto → installed artifact
+    execution runs the installed result
 
 THE CANONICAL LOWER STACK
     transitions
     → Machine IR
     → canonical machine: gen, param, state
-    → backend lowering
-    → Unit runtime: { fn, state_t }
+    → proto language
+    → Unit / installed artifact
 
 THE LIVE SYSTEM
     poll → apply → compile → execute
 
 THE BACKEND STORY
-    LuaJIT by default
-    Terra by opt-in
+    source language and phase meaning stay stable
+    proto language and realization policy vary below them
+    LuaJIT by default; Terra by opt-in
 
-THE TERRA INSIGHT
-    explicit types and staging are not just backend power
-    they are design pressure
+THE REALIZATION RULE
+    every machine crosses a proto boundary
+    some protos stay thin as closures or native installs
+    others expand into template → blob → bind or source-kernel families
+    bytecode is an artifact, and source kernels are explicit artifacts too
 
 THE DEEPEST RULE
     the source ASDL is the architecture
 
 THE EXECUTION RULE
     functional structure builds machines;
-    machines become Units; Units run
+    realization installs machines;
+    installed artifacts run
 ```
 
-> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software: the source ASDL describes a program whose meaning is progressively narrowed by transitions into Machine IR, then into a canonical machine, then through backend lowering into Unit runtime artifacts that execution runs until the source changes again. Terra is one especially powerful way to realize that architecture when explicit native control is worth the cost.
+> The pattern is not Terra. The pattern is domain-compilation-driven design for interactive software: the source ASDL describes a program whose meaning is progressively narrowed by transitions into Machine IR, then into a canonical machine, then through realization into installed runtime artifacts that execution runs until the source changes again. On LuaJIT, the default serious realization path should usually be template → bytecode blob → load + explicit binding, with direct closures reserved for the smallest simple cases and structural artifact/install frameworks used when named installation nouns are real. On Terra, realization may be explicit native code and native layout. Terra is one especially powerful realization style, not the definition of the pattern itself.
